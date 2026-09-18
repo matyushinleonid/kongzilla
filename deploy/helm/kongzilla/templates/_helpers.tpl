@@ -24,6 +24,20 @@ app.kubernetes.io/name: {{ include "kongzilla.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{/*
+The site's own pods, and nothing else.
+
+A selector matches every pod carrying at least these labels, so selecting on the
+release alone reaches the beacon too - it is part of the same release and wears
+the same two labels plus one of its own. The site's service would then send one
+request in three to a process that only knows `/api/event`, and answers 404 to
+everything else.
+*/}}
+{{- define "kongzilla.siteSelectorLabels" -}}
+{{ include "kongzilla.selectorLabels" . }}
+app.kubernetes.io/component: web
+{{- end }}
+
 {{- define "kongzilla.labels" -}}
 helm.sh/chart: {{ include "kongzilla.chart" . }}
 {{ include "kongzilla.selectorLabels" . }}
