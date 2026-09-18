@@ -7,7 +7,9 @@ metadata:
     {{- include "kongzilla.labels" . | nindent 4 }}
 spec:
   minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  # The site's pods only: the beacon is one replica and keeping it up is not
+  # this budget's business.
   selector:
     matchLabels:
-      {{- include "kongzilla.selectorLabels" . | nindent 6 }}
+      {{- include "kongzilla.siteSelectorLabels" . | nindent 6 }}
 {{- end }}

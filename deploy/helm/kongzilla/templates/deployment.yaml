@@ -11,6 +11,10 @@ spec:
     rollingUpdate:
       maxUnavailable: 0
       maxSurge: 1
+  # Deliberately the release labels rather than the site's own: a deployment's
+  # selector cannot be changed after it exists, and this one predates the
+  # component label. It still matches only this deployment's pods, because a
+  # replica set narrows it further with its own template hash.
   selector:
     matchLabels:
       {{- include "kongzilla.selectorLabels" . | nindent 6 }}
@@ -21,7 +25,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "kongzilla.selectorLabels" . | nindent 8 }}
+        {{- include "kongzilla.siteSelectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
