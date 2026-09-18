@@ -1,0 +1,212 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Must match `wasm-bindgen` in crates/kongzilla-wasm/Cargo.toml and the Dockerfile.
+  WASM_BINDGEN_VERSION: 0.2.128
+
+jobs:
+  engine:
+    name: Engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          cache-key: engine
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Check documentation
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the pinned toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+          cache-key: wasm
+
+      - name: Install wasm-bindgen
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ env.WASM_BINDGEN_VERSION }}
+
+      - name: Build the engine for the browser
+        run: |
+          cargo build --release --target wasm32-unknown-unknown -p kongzilla-wasm
+          wasm-bindgen --target web --out-dir web/wasm \
+            target/wasm32-unknown-unknown/release/kongzilla_wasm.wasm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Check formatting
+        working-directory: web
+        run: npm run format:check
+
+      - name: Type-check
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Test the WebAssembly boundary
+        working-directory: web
+        run: npm test
+
+      - name: Build
+        working-directory: web
+        run: npm run build
+
+      # The release ships this file, so a change that breaks it has to fail here
+      # rather than on release day.
+      - name: Build the standalone page
+        working-directory: web
+        run: npm run build:standalone
+
+      - name: The standalone page has nothing left to fetch
+        working-directory: web
+        run: |
+          set -euo pipefail
+          test "$(find dist-standalone -type f | wc -l)" -eq 1
+          ! grep -oE '(src|href)="(?!data:|https?:|mailto:|#)[^"]+"' -P dist-standalone/index.html
+
+  helm:
+    name: Helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5.0.0
+        with:
+          version: v3.18.4
+
+      - name: Lint chart
+        run: helm lint deploy/helm/kongzilla
+
+      - name: Render production manifests
+        run: >-
+          helm template kongzilla deploy/helm/kongzilla
+          --namespace kongzilla
+          --set gateway.enabled=true
+          --set image.repository=cr.yandex/example/kongzilla
+
+      # The release stamps one version into five files. If a key is renamed and
+      # the stamper stops finding it, that has to fail here, not mid-release.
+      # The beacon is a separate concern, so nginx must not be asked to serve
+      # /api/ - it has no back end and would answer 200 with the app's HTML,
+      # which is worse than a clean 404.
+      - name: The static server does not answer for the beacon
+        run: |
+          set -euo pipefail
+          grep -q 'location = /api/' web/nginx.conf
+
+      - name: The version stamper reaches every file
+        run: |
+          set -euo pipefail
+          python3 scripts/set_version.py 9.9.9
+          changed="$(git diff --name-only | sort | tr '\n' ' ')"
+          expected="Cargo.toml deploy/helm/kongzilla/Chart.yaml deploy/helm/kongzilla/values.yaml web/package-lock.json web/package.json "
+          test "$changed" = "$expected" || { echo "stamped: $changed" >&2; exit 1; }
+          git checkout -- .
+
+  publish-image:
+    name: Publish commit image
+    if: github.event_name == 'push'
+    needs:
+      - engine
+      - web
+      - helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Yandex Container Registry
+        uses: yc-actions/yc-cr-login@v3
+        with:
+          yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_CREDENTIALS }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare image metadata
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: cr.yandex/${{ vars.YC_REGISTRY_ID }}/${{ vars.YC_REGISTRY_REPOSITORY }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: production
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The beacon rides the same tags as the site it counts, so the two can
+      # never be deployed a version apart.
+      - name: Prepare beacon image metadata
+        id: beacon-metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: cr.yandex/${{ vars.YC_REGISTRY_ID }}/${{ vars.YC_REGISTRY_REPOSITORY }}-beacon
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+
+      - name: Build and publish the beacon image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: beacon
+          push: true
+          tags: ${{ steps.beacon-metadata.outputs.tags }}
+          labels: ${{ steps.beacon-metadata.outputs.labels }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

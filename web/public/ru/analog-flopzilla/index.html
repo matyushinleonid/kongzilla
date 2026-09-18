@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Аналог Flopzilla в браузере — бесплатно, без установки</title>
+    <meta
+      name="description"
+      content="Kongzilla — бесплатный разбор диапазонов и текстуры борда прямо в браузере. Матрица рук, статистика попаданий, фильтры, эквити. Windows, macOS, Linux — установка не нужна."
+    />
+    <link rel="canonical" href="https://kongzilla.leonid.sh/ru/analog-flopzilla/" />
+    <link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/analog-flopzilla/" />
+    <link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/flopzilla-alternative/" />
+    <link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/flopzilla-alternative/" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="stylesheet" href="/pages.css" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="ru_RU" />
+    <meta property="og:title" content="Аналог Flopzilla в браузере — бесплатно, без установки" />
+    <meta
+      property="og:description"
+      content="Разбор диапазонов и текстуры борда в браузере. Без установки, без ключа, с открытым исходным кодом."
+    />
+    <meta property="og:url" content="https://kongzilla.leonid.sh/ru/analog-flopzilla/" />
+    <meta property="og:image" content="https://kongzilla.leonid.sh/logo.png" />
+    <meta name="twitter:card" content="summary" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "inLanguage": "ru",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Есть ли бесплатный аналог Flopzilla?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Kongzilla закрывает тот же круг задач: задать диапазон, раздать флоп, посмотреть попадание по категориям рук и отфильтровать те комбо, с которыми продолжаете. Работает прямо в браузере, исходный код открыт, лицензионный ключ не нужен."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Flopzilla работает на macOS и Linux?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Flopzilla написана под Windows, на других системах её запускают через Wine или виртуальную машину. Kongzilla — это веб-страница, поэтому macOS, Linux и ChromeOS работают одинаково."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Насколько быстро считает браузерная версия?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Движок написан на Rust и собран в WebAssembly. Статистика по борду пересчитывается на каждое нажатие клавиши, эквити считается полным перебором, а не выборкой."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Уходят ли диапазоны куда-то на сервер?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Нет. Все расчёты идут во вкладке браузера, отправлять данные некуда — сервер отдаёт только статические файлы."
+            }
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="site">
+        <img src="/logo.png" width="32" height="32" alt="" />
+        <a href="/">Kongzilla</a>
+        <nav>
+          <a href="/">Приложение</a>
+          <a href="/ru/rukovodstvo/">Как пользоваться</a>
+          <a href="/flopzilla-alternative/" hreflang="en" lang="en">EN</a>
+        </nav>
+      </header>
+
+      <h1>Аналог Flopzilla, который открывается в браузере</h1>
+
+      <p class="lede">
+        Kongzilla — бесплатная программа для работы с диапазонами, с открытым исходным кодом.
+        Задаёте диапазон,
+        раздаёте флоп и сразу видите, чем этот диапазон попал в борд: от стрит-флеша до старшей
+        карты, отдельно дро, отдельно комбинированные руки. Дальше оставляете только те комбо, с
+        которыми продолжаете, и работаете уже с ними.
+      </p>
+
+      <a class="cta" href="/">Открыть Kongzilla</a>
+
+      <h2>Зачем вообще нужен такой софт</h2>
+      <p>
+        Считать в уме попадание диапазона в борд бессмысленно: 1326 комбинаций и 22 100 флопов.
+        Ощущение «он тут редко попадает» и реальные 29% — это разные вещи, и разница видна только
+        когда цифру посчитали. Работа с таким калькулятором — это не про одну руку, а про привычку
+        держать в голове распределение, а не конкретные две карты.
+      </p>
+
+      <h2>Что умеет</h2>
+      <ul>
+        <li>
+          <strong>Матрица 13×13.</strong> Рисуете мышью, задаёте веса для смешанных стратегий,
+          пишете текстом — <code>AKs+, 77-99, QJo</code>, <code>KQs:0.5</code> для руки, которая
+          играется в половине случаев. Ползунок отрезает верх диапазона по силе рук. По shift-клику
+          раскрывается ячейка, и масть выбирается поштучно.
+        </li>
+        <li>
+          <strong>Попадание в борд.</strong> Вся лестница готовых рук плюс флеш-дро, двухсторонние
+          стрит-дро, гатшоты, бэкдоры и оверкарты. Кнопки «посчитать» нет — цифры меняются, пока вы
+          набираете.
+        </li>
+        <li>
+          <strong>Фильтры по цветам.</strong> Красите категории рук в цвета, а потом жмёте фильтр
+          улицы — флопа, терна или ривера. Диапазон дальше — это то, что несло цвет в момент
+          нажатия. Круговая диаграмма показывает доли.
+        </li>
+        <li>
+          <strong>Эквити.</strong> Полный перебор, диапазон против диапазона или рука против
+          диапазона, с матрицей по каждому комбо и графиком распределения.
+        </li>
+        <li>
+          <strong>Статистика по всем 22 100 флопам.</strong> Как диапазон чувствует себя в среднем,
+          а не на одном конкретном борде, и как часто вообще приходит флоп нужной фактуры.
+        </li>
+        <li>
+          <strong>Готовые чарты МТТ.</strong> Солверные диапазоны на 20–100 ББ по позициям: опен-рейз
+          с UTG до SB, лимп и рейз с SB, защита BB против каждой позиции, изоляция лимпа SB.
+        </li>
+      </ul>
+
+      <h2>Чем отличается от привычных вариантов</h2>
+      <p>
+        В этом ряду обычно называют четыре-пять программ. Коротко, чем Kongzilla от них отличается:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Программа</th>
+            <th>Цена</th>
+            <th>Чем берёт</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Flopzilla / Flopzilla Pro</td>
+            <td>Платно</td>
+            <td>Эталон жанра, но только Windows и только по ключу</td>
+          </tr>
+          <tr>
+            <td>Equilab</td>
+            <td>Бесплатно</td>
+            <td>Считает эквити, но разбор попаданий заметно беднее</td>
+          </tr>
+          <tr>
+            <td>Power-Equilab</td>
+            <td>Бесплатно</td>
+            <td>Функционально близко, интерфейс на любителя, Windows</td>
+          </tr>
+          <tr>
+            <td>PokerRanger, oRanges Calculator</td>
+            <td>Платно</td>
+            <td>Больше вспомогательных расчётов — пот-оддсы, фолд-эквити</td>
+          </tr>
+          <tr>
+            <td><strong>Kongzilla</strong></td>
+            <td><strong>Бесплатно, MIT</strong></td>
+            <td><strong>Браузер, любая ОС, открытый код, оффлайн-файл</strong></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Частые вопросы</h2>
+
+      <h3>Действительно бесплатно?</h3>
+      <p>
+        Да. Лицензия MIT, весь код лежит на
+        <a href="https://github.com/matyushinleonid/kongzilla">GitHub</a>. Платных тарифов нет,
+        регистрации нет, ключ вводить не нужно.
+      </p>
+
+      <h3>Нужен ли интернет каждый раз?</h3>
+      <p>
+        Нет. К каждому релизу приложен один HTML-файл со встроенным движком: скачали, открыли двойным
+        кликом — работает без сети. Это удобно, когда интернет ненадёжный или его нет вовсе.
+      </p>
+
+      <h3>А на Mac или на Linux?</h3>
+      <p>
+        Без разницы. Flopzilla — программа под Windows, Kongzilla — страница, поэтому macOS, Linux,
+        ChromeOS и планшет ведут себя одинаково.
+      </p>
+
+      <h3>Куда уходят мои диапазоны?</h3>
+      <p>
+        Никуда. Движок собран в WebAssembly и считает во вкладке браузера. Сервер раздаёт статические
+        файлы, принимать данные ему нечем.
+      </p>
+
+      <h3>Можно поделиться раскладом?</h3>
+      <p>
+        Кнопка «Copy link» упаковывает всю сессию — оба диапазона, борд, мёртвые карты, раскраску — в
+        адрес страницы. Ссылку можно кинуть в чат разбора, и человек откроет ровно то же самое.
+      </p>
+
+      <footer class="site">
+        Kongzilla не связана с Flopzilla и её авторами. Flopzilla — торговая марка своих
+        правообладателей, здесь она упомянута, чтобы объяснить, о каком классе программ речь.
+        <a href="https://github.com/matyushinleonid/kongzilla">Исходный код</a> ·
+        <a href="/flopzilla-alternative/" hreflang="en" lang="en">In English</a>
+      </footer>
+    </div>
+    <script src="/pages.js" defer></script>
+  </body>
+</html>

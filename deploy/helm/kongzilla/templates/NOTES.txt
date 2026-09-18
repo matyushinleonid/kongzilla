@@ -1,0 +1,7 @@
+{{- if .Values.gateway.enabled }}
+Kongzilla will be at https://{{ .Values.gateway.host }}/ once DNS and the certificate settle.
+{{- else }}
+Gateway resources are disabled. Port-forward the service to look at it:
+
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "kongzilla.fullname" . }} 8080:{{ .Values.service.port }}
+{{- end }}

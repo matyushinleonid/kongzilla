@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>What Flopzilla Does, and Why Range Analysis Works</title>
+    <meta
+      name="description"
+      content="What a Flopzilla-style range analyser actually computes: hand ranges, board texture, the made-hand ladder, draws, filters and equity — and how to read the numbers."
+    />
+    <link rel="canonical" href="https://kongzilla.leonid.sh/what-is-flopzilla/" />
+    <link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/what-is-flopzilla/" />
+    <link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/razbor-diapazonov/" />
+    <link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/what-is-flopzilla/" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="stylesheet" href="/pages.css" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="What Flopzilla Does, and Why Range Analysis Works" />
+    <meta property="og:url" content="https://kongzilla.leonid.sh/what-is-flopzilla/" />
+    <meta property="og:image" content="https://kongzilla.leonid.sh/logo.png" />
+    <meta name="twitter:card" content="summary" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="site">
+        <img src="/logo.png" width="32" height="32" alt="" />
+        <a href="/">Kongzilla</a>
+        <nav>
+          <a href="/">App</a>
+          <a href="/flopzilla-alternative/">Free alternative</a>
+          <a href="/guide/">Guide</a>
+          <a href="/ru/razbor-diapazonov/" hreflang="ru" lang="ru">RU</a>
+        </nav>
+      </header>
+
+      <h1>What Flopzilla does, and why range analysis works</h1>
+
+      <p class="lede">
+        Flopzilla is the program that taught a generation of players to stop thinking about their
+        own two cards and start thinking about distributions. This page explains what that kind of
+        tool actually computes, so the numbers mean something when you read them.
+      </p>
+
+      <h2>A range, not a hand</h2>
+      <p>
+        There are 1,326 two-card combinations in Hold'em, which collapse to 169 classes once you
+        ignore which suit is which: 13 pocket pairs, 78 suited hands, 78 offsuit hands. A range is a
+        weight on each of those combinations — usually 1 or 0, but a solver will play a hand half
+        the time, so fractional weights matter.
+      </p>
+      <p>
+        That is the matrix you see in every one of these tools: 13 by 13, pairs down the diagonal,
+        suited above it, offsuit below.
+      </p>
+
+      <h2>What a board does to a range</h2>
+      <p>
+        Deal three cards and every combination in the range becomes something specific. The analyser
+        walks the range and sorts each combination onto a ladder — straight flush, quads, full
+        house, flush, straight, set, trips, two pair, overpair, top pair, and so on down to no made
+        hand — and separately onto a list of draws: flushdraw, open-ended straight draw, gutshot,
+        backdoor flushdraw, overcards.
+      </p>
+      <p>
+        A hand can be on both lists at once, which is the point. Ace-high with the nut flushdraw is
+        nothing at showdown and a favourite by the river.
+      </p>
+
+      <h2>Reading the numbers</h2>
+      <p>
+        Two questions are worth asking of every board. <em>How often does this range have it?</em> —
+        if a range makes top pair or better 35% of the time, betting into it every street is a
+        different proposition than if it does so 12% of the time. And <em>what does it do with the
+        rest?</em> — a range with no made hand 40% of the time but a draw in half of those has far
+        more to continue with than the raw number suggests.
+      </p>
+
+      <h2>Filters: the part that separates a range analyser from an equity calculator</h2>
+      <p>
+        An equity calculator tells you how one range does against another. A range analyser lets you
+        say <em>this</em> is the part of the range that keeps going — top pair and better, plus the
+        flushdraws — and then answers every other question about that subset instead. That is how
+        you model a street: your opponent's range on the turn is not their flop range, it is
+        whatever part of it called.
+      </p>
+      <p>
+        Class-based filters are re-read every street: a hand marked as continuing because it was a
+        flushdraw stops matching once the draw bricks. That is why Kongzilla also offers a cut by
+        equity, which freezes the combinations it chose so they carry to the next card the way a
+        real continuing range does.
+      </p>
+
+      <h2>Board texture</h2>
+      <p>
+        There are 22,100 distinct flops. They are not interchangeable: roughly 55% come two-tone, 5%
+        monotone, and about a fifth are ace-high. Working out how a range performs averaged over all
+        of them tells you something no single flop can.
+      </p>
+
+      <p>
+        <a class="cta" href="/">Try it on your own range</a>
+      </p>
+
+      <footer class="site">
+        <a href="/ru/razbor-diapazonov/" hreflang="ru" lang="ru">Разбор диапазонов — по-русски</a> ·
+
+        Kongzilla is a free, open-source range analyser. It is not affiliated with Flopzilla or its
+        authors. <a href="/flopzilla-alternative/">How the two compare</a> ·
+        <a href="https://github.com/matyushinleonid/kongzilla">Source on GitHub</a>.
+      </footer>
+    </div>
+    <script src="/pages.js" defer></script>
+  </body>
+</html>

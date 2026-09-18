@@ -1,0 +1,14 @@
+.git
+.github
+target
+.cargo-home
+.npm-cache
+build
+docs
+data
+scripts
+web/node_modules
+web/dist
+web/dist-standalone
+web/wasm
+**/*.log

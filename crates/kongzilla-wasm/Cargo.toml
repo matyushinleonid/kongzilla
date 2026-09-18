@@ -1,0 +1,20 @@
+[package]
+name = "kongzilla-wasm"
+description = "WebAssembly bindings for the Kongzilla engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kongzilla-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = "=0.2.128"  # must match WASM_BINDGEN_VERSION in the Dockerfile and CI
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz"]

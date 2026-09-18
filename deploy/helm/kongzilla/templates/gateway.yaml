@@ -1,0 +1,143 @@
+{{- if .Values.gateway.enabled }}
+{{- $fullname := include "kongzilla.fullname" . }}
+{{- $aliases := .Values.gateway.aliases | default list }}
+{{- $hosts := prepend $aliases (dict "host" .Values.gateway.host "dnsTarget" .Values.gateway.dnsTarget) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-public-dns
+  labels:
+    {{- include "kongzilla.labels" . | nindent 4 }}
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: {{ .Values.gateway.host | quote }}
+    external-dns.alpha.kubernetes.io/target: {{ .Values.gateway.dnsTarget | quote }}
+spec:
+  type: ExternalName
+  externalName: {{ .Values.gateway.dnsTarget | quote }}
+{{- range $index, $entry := $aliases }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ printf "%s-alias-%d-dns" $fullname $index }}
+  labels:
+    {{- include "kongzilla.labels" $ | nindent 4 }}
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: {{ $entry.host | quote }}
+    external-dns.alpha.kubernetes.io/target: {{ $entry.dnsTarget | quote }}
+spec:
+  type: ExternalName
+  externalName: {{ $entry.dnsTarget | quote }}
+{{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: ListenerSet
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kongzilla.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.gateway.clusterIssuer | quote }}
+spec:
+  parentRef:
+    name: {{ .Values.gateway.parent.name | quote }}
+    namespace: {{ .Values.gateway.parent.namespace | quote }}
+  listeners:
+    - name: https
+      hostname: {{ .Values.gateway.host | quote }}
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: {{ $fullname }}-tls
+    {{- range $index, $entry := $aliases }}
+    - name: {{ printf "https-alias-%d" $index }}
+      hostname: {{ $entry.host | quote }}
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: {{ printf "%s-alias-%d-tls" $fullname $index }}
+    {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kongzilla.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ $fullname }}
+      kind: ListenerSet
+      sectionName: https
+  hostnames:
+    - {{ .Values.gateway.host | quote }}
+  rules:
+    {{- if .Values.beacon.enabled }}
+    # The beacon before the catch-all, so /api/ does not fall through to the
+    # static server. Only /api/ is routed: /metrics stays inside the cluster.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      backendRefs:
+        - name: {{ printf "%s-beacon" $fullname }}
+          port: 80
+    {{- end }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ $fullname }}
+          port: {{ .Values.service.port }}
+{{- range $index, $entry := $aliases }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ printf "%s-alias-%d" $fullname $index }}
+  labels:
+    {{- include "kongzilla.labels" $ | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ $fullname }}
+      kind: ListenerSet
+      sectionName: {{ printf "https-alias-%d" $index }}
+  hostnames:
+    - {{ $entry.host | quote }}
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            hostname: {{ $.Values.gateway.host | quote }}
+            statusCode: 301
+{{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $fullname }}-http-redirect
+  labels:
+    {{- include "kongzilla.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ .Values.gateway.parent.name | quote }}
+      namespace: {{ .Values.gateway.parent.namespace | quote }}
+      sectionName: {{ .Values.gateway.parent.httpSectionName | quote }}
+  hostnames:
+    {{- range $entry := $hosts }}
+    - {{ $entry.host | quote }}
+    {{- end }}
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            hostname: {{ .Values.gateway.host | quote }}
+            statusCode: 301
+{{- end }}

@@ -1,0 +1,27 @@
+/target
+**/node_modules
+/web/dist
+/web/dist-standalone
+/web/wasm
+
+/build
+.DS_Store
+*.log
+/.cargo-home
+/.npm-cache
+.idea/
+.vscode/
+
+# Working material, not sources. `data/` holds the original artwork and 48MB of
+# solver screenshots; `scripts/charts` is the reader that turns those into
+# frequencies, and is no use without them. What the build actually eats is the
+# generated `library_charts.rs`, which is committed - nothing else in this
+# pipeline is needed to build, run or ship the app.
+#
+# `scripts/set_version.py` stays: CI and the release workflow run it.
+/data/
+/scripts/charts/
+__pycache__/
+
+# Notes kept beside the code rather than shipped with it.
+/docs/

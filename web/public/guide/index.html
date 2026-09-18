@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kongzilla Guide — Ranges, Flops, Filters, Equity</title>
+    <meta
+      name="description"
+      content="How to use Kongzilla: build a range, deal a flop, read the statistics, filter down to a continuing range, and read equity. A short guide to the free browser range analyser."
+    />
+    <link rel="canonical" href="https://kongzilla.leonid.sh/guide/" />
+    <link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/guide/" />
+    <link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/rukovodstvo/" />
+    <link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/guide/" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="stylesheet" href="/pages.css" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="Kongzilla Guide" />
+    <meta property="og:url" content="https://kongzilla.leonid.sh/guide/" />
+    <meta property="og:image" content="https://kongzilla.leonid.sh/logo.png" />
+    <meta name="twitter:card" content="summary" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="site">
+        <img src="/logo.png" width="32" height="32" alt="" />
+        <a href="/">Kongzilla</a>
+        <nav>
+          <a href="/">App</a>
+          <a href="/flopzilla-alternative/">Free alternative</a>
+          <a href="/what-is-flopzilla/">Background</a>
+          <a href="/ru/rukovodstvo/" hreflang="ru" lang="ru">RU</a>
+        </nav>
+      </header>
+
+      <h1>Using Kongzilla</h1>
+
+      <p class="lede">
+        Everything recomputes as you go, so there is no calculate button anywhere. Five minutes end
+        to end.
+      </p>
+
+      <h2>1. Build a range</h2>
+      <p>
+        Drag across the matrix to paint, or type notation into the box under it —
+        <code>AKs+, 77-99, QJo</code>, and <code>KQs:0.5</code> for a hand played half the time.
+        The slider under the matrix takes a band off the top of a hand ranking, and the
+        <em>All / Pocket / Broadway / Suited</em> buttons add whole groups. Shift-click a cell to
+        pick individual suit combinations.
+      </p>
+      <p>
+        The chart chips below load solver ranges for tournament play: pick a stack depth, then a
+        seat. The chip stays lit while the range is still that chart.
+      </p>
+
+      <h2>2. Deal a flop</h2>
+      <p>
+        Click three cards in the board grid, or press <em>Random</em>. Every row in the flops panel
+        also deals — a random two-tone flop, a random ace-high flop — which is faster than thinking
+        one up.
+      </p>
+
+      <h2>3. Read the statistics</h2>
+      <p>
+        The middle panel is the ladder: made hands, then draws, then the combinations that matter
+        (flushdraw plus pair, and so on). Hover a row and the matrix lights up with the cells that
+        hold it, and every other row re-reads as "how often, given this one".
+      </p>
+      <p>
+        Switch between <em>absolute</em> ("exactly this") and <em>cumulative</em> ("this or better")
+        with the button in the header, and between percentages and combination counts with Tab.
+      </p>
+
+      <h2>4. Narrow it down</h2>
+      <p>
+        Mark which classes continue and which are gone, then turn the filters on: the whole panel,
+        the equity and the effective range all re-read through them.
+      </p>
+      <p>
+        Or use <em>Continue top</em>, which cuts the range to its strongest share by equity on this
+        board. Unlike a class ladder it keeps the draws — a nut flushdraw with no pair outranks a
+        middle pair, which is how it is actually played — and it freezes the combinations it chose,
+        so they carry to the turn and river.
+      </p>
+
+      <h2>5. Read equity</h2>
+      <p>
+        Fill the second seat for range versus range. For hand versus range, put the one hand in a
+        seat — a hand is a range with one combination in it, and everything that works for a range
+        works for it. Add a third seat with <b>+</b> for a multiway pot, and choose which range the
+        equity views measure against from the output panel's header. The output panel has the equity
+        matrix (every combination, coloured), the equity graph (the distribution, strongest first,
+        with the opponent drawn alongside) and hotness (what each remaining card does to the
+        matchup).
+      </p>
+
+      <h2>The keyboard</h2>
+      <p>
+        Press <code>?</code> for the full list. The ones worth learning first:
+        <code>R</code> deals a random flop, <code>Tab</code> swaps percentages for combination
+        counts, the arrow keys step through the streets, <code>1</code> <code>2</code>
+        <code>3</code> apply the flop, turn and river filters, and <code>Alt+S</code> clears
+        everything. Anyone arriving from Flopzilla will find its own keys where they expect them,
+        except the few a browser refuses to hand over — the list says which moved.
+      </p>
+
+      <h2>Sharing and saving</h2>
+      <p>
+        <em>Copy link</em> packs the whole session into the URL. <em>Save</em> writes a file you can
+        load back. Nothing is sent anywhere; the engine runs inside your browser tab.
+      </p>
+
+      <p>
+        <a class="cta" href="/">Open Kongzilla</a>
+      </p>
+
+      <footer class="site">
+        <a href="/ru/rukovodstvo/" hreflang="ru" lang="ru">Как пользоваться — по-русски</a> ·
+
+        Free and open source under the MIT licence.
+        <a href="https://github.com/matyushinleonid/kongzilla">Source on GitHub</a>.
+      </footer>
+    </div>
+    <script src="/pages.js" defer></script>
+  </body>
+</html>

@@ -1,0 +1,2761 @@
+/*
+ * The interface follows FlopzillaPro's own layout: a strip of seat thumbnails,
+ * the dead cards and the equity readout across the top, then starting hands on
+ * the left, the board in a narrow middle column, and the statistics on the right.
+ * Dense, flat, four-colour deck, everything on one screen. It is a familiar
+ * starting point rather than a commitment.
+ */
+
+:root {
+  --bg: #efefef;
+  --panel: #ffffff;
+  --panel-sunken: #fafafa;
+  --line: #c9c9c9;
+  --line-soft: #e6e6e6;
+  --ink: #202020;
+  --ink-soft: #4f4f4f;
+  --ink-faint: #8c8c8c;
+
+  --made: #1e88e5;
+  --draw: #43a047;
+  --combination: #d61ad6;
+
+  --select: #ffc93c;
+  --select-edge: #dda600;
+  --lit: #8b5cc7;
+  --cut-edge: #15202b;
+  --group-0: #c9c9c9;
+  --group-1: #2f7ed8;
+  --group-2: #3f9e57;
+  --group-3: #d9534f;
+  --group-4: #9b59b6;
+  --group-5: #d6a24a;
+  --group-6: #2aa7b5;
+  --group-7: #8ba43b;
+  --accent: #1e88e5;
+  --go: #3cb54a;
+  --go-edge: #2f9c3c;
+  --warn: #d32f2f;
+
+  /* One colour per seat, up to a six-handed table. The first two are the blue
+     and the red the seats have always worn, so nothing moves under a reader
+     who only ever uses two. */
+  --seat-0: #1e88e5;
+  --seat-1: #d9534f;
+  --seat-2: #2e9e5b;
+  --seat-3: #9b59b6;
+  --seat-4: #d6a24a;
+  --seat-5: #2aa7b5;
+
+  --suit-h-bg: #ffdcdc;
+  --suit-h-fg: #d32f2f;
+  --suit-c-bg: #d9f0d9;
+  --suit-c-fg: #2e7d32;
+  --suit-d-bg: #d9e6fb;
+  --suit-d-fg: #1565c0;
+  --suit-s-bg: #e6e6e6;
+  --suit-s-fg: #37474f;
+  --suit-h-solid: #e53935;
+  --suit-c-solid: #43a047;
+  --suit-d-solid: #1e88e5;
+  --suit-s-solid: #546e7a;
+
+  --btn: #f6f6f6;
+  --btn-hover: #ffffff;
+  --btn-on: #dbeafe;
+  --chip: #eef4fb;
+  --chip-edge: #b9d3ee;
+  --track: #ececec;
+  --row-hover: #e8f1fb;
+  --mark-off: #c4c4c4;
+  --badge: rgba(255, 255, 255, 0.86);
+  --slot-a: #f2f2f2;
+  --slot-b: #e9e9e9;
+  --toast: #3b2320;
+  --toast-ink: #ffe9e6;
+
+  --cell-empty: #fbfbfb;
+  --cell-filtered: #dcdcdc;
+  --paint-pair: #96bbdb;
+  --paint-suited: #dcc47a;
+  --paint-offsuit: #dc9f8b;
+  --cell-edge: #dcdcdc;
+  --cell-edge-on: rgba(0, 0, 0, 0.22);
+  --cell-ink: #8f8f8f;
+  --cell-ink-on: #303030;
+
+  --bad: #d64b3c;
+  --good: #3f9e57;
+
+  font-family: "Segoe UI", Tahoma, "DejaVu Sans", system-ui, sans-serif;
+  font-size: 12px;
+}
+
+/*
+ * Dark scheme. Only the tokens change: every component above reads through them,
+ * so the two schemes cannot drift apart. Three states are covered - a pinned
+ * choice either way, and the unstamped default that follows the system.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15171a;
+    --panel: #1d2024;
+    --panel-sunken: #191c20;
+    --line: #3a3f46;
+    --line-soft: #2b2f35;
+    --ink: #e4e6ea;
+    --ink-soft: #b2b7bf;
+    --ink-faint: #838a94;
+
+    --made: #4f9be8;
+    --draw: #57b26b;
+    --combination: #cf5fcf;
+
+    --select: #e0af34;
+    --select-edge: #b98c13;
+    --lit: #a074d8;
+    --cut-edge: #eef3f8;
+    --group-0: #444a52;
+    --group-1: #4f97e8;
+    --group-2: #4bb06b;
+    --group-3: #e2695f;
+    --group-4: #b06fcc;
+    --group-5: #e0b45f;
+    --group-6: #3cc0cf;
+    --group-7: #a3bd4d;
+    --accent: #4f9be8;
+    --seat-0: #4f9be8;
+    --seat-1: #e1685c;
+    --seat-2: #45a86b;
+    --seat-3: #a96fc4;
+    --seat-4: #d6a24a;
+    --seat-5: #3fb3bf;
+    --go: #2f8f3c;
+    --go-edge: #256f2f;
+    --warn: #e1685c;
+
+    --suit-h-bg: #46262a;
+    --suit-h-fg: #f0908c;
+    --suit-c-bg: #26402c;
+    --suit-c-fg: #7cc98a;
+    --suit-d-bg: #23364d;
+    --suit-d-fg: #7fb3e8;
+    --suit-s-bg: #33383f;
+    --suit-s-fg: #c2cad3;
+    --suit-h-solid: #a8362f;
+    --suit-c-solid: #2d6f39;
+    --suit-d-solid: #2a63a8;
+    --suit-s-solid: #4a545e;
+
+    --btn: #262a30;
+    --btn-hover: #2f343b;
+    --btn-on: #23405e;
+    --chip: #22303f;
+    --chip-edge: #35506b;
+    --track: #2a2e34;
+    --row-hover: #23303e;
+    --mark-off: #545a63;
+    --badge: rgba(20, 22, 26, 0.82);
+    --slot-a: #22262b;
+    --slot-b: #1c2024;
+    --toast: #4a2a26;
+    --toast-ink: #ffe3df;
+
+    --cell-empty: #191c20;
+    --cell-filtered: #363b42;
+    --paint-pair: #3f6c92;
+    --paint-suited: #957d41;
+    --paint-offsuit: #99604f;
+    --cell-edge: #363b42;
+    --cell-edge-on: rgba(0, 0, 0, 0.4);
+    --cell-ink: #767d87;
+    --cell-ink-on: #eef1f5;
+
+    --bad: #c9503f;
+    --good: #45a05c;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #15171a;
+  --panel: #1d2024;
+  --panel-sunken: #191c20;
+  --line: #3a3f46;
+  --line-soft: #2b2f35;
+  --ink: #e4e6ea;
+  --ink-soft: #b2b7bf;
+  --ink-faint: #838a94;
+
+  --made: #4f9be8;
+  --draw: #57b26b;
+  --combination: #cf5fcf;
+
+  --select: #e0af34;
+  --select-edge: #b98c13;
+  --lit: #a074d8;
+  --cut-edge: #eef3f8;
+  --group-0: #444a52;
+  --group-1: #4f97e8;
+  --group-2: #4bb06b;
+  --group-3: #e2695f;
+  --group-4: #b06fcc;
+  --group-5: #e0b45f;
+  --group-6: #3cc0cf;
+  --group-7: #a3bd4d;
+  --accent: #4f9be8;
+  --seat-0: #4f9be8;
+  --seat-1: #e1685c;
+  --seat-2: #45a86b;
+  --seat-3: #a96fc4;
+  --seat-4: #d6a24a;
+  --seat-5: #3fb3bf;
+  --go: #2f8f3c;
+  --go-edge: #256f2f;
+  --warn: #e1685c;
+
+  --suit-h-bg: #46262a;
+  --suit-h-fg: #f0908c;
+  --suit-c-bg: #26402c;
+  --suit-c-fg: #7cc98a;
+  --suit-d-bg: #23364d;
+  --suit-d-fg: #7fb3e8;
+  --suit-s-bg: #33383f;
+  --suit-s-fg: #c2cad3;
+  --suit-h-solid: #a8362f;
+  --suit-c-solid: #2d6f39;
+  --suit-d-solid: #2a63a8;
+  --suit-s-solid: #4a545e;
+
+  --btn: #262a30;
+  --btn-hover: #2f343b;
+  --btn-on: #23405e;
+  --chip: #22303f;
+  --chip-edge: #35506b;
+  --track: #2a2e34;
+  --row-hover: #23303e;
+  --mark-off: #545a63;
+  --badge: rgba(20, 22, 26, 0.82);
+  --slot-a: #22262b;
+  --slot-b: #1c2024;
+  --toast: #4a2a26;
+  --toast-ink: #ffe3df;
+
+  --cell-empty: #191c20;
+  --cell-filtered: #363b42;
+  --paint-pair: #3f6c92;
+  --paint-suited: #957d41;
+  --paint-offsuit: #99604f;
+  --cell-edge: #363b42;
+  --cell-edge-on: rgba(0, 0, 0, 0.4);
+  --cell-ink: #767d87;
+  --cell-ink-on: #eef1f5;
+
+  --bad: #c9503f;
+  --good: #45a05c;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.loading,
+.fatal {
+  padding: 40px;
+  font-size: 14px;
+}
+
+.fatal {
+  color: var(--warn);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  gap: 6px;
+}
+
+/* ----- menu bar ----------------------------------------------------------- */
+
+.menubar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand-logo {
+  display: block;
+  width: 24px;
+  height: 24px;
+  image-rendering: auto;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-decoration: none;
+  line-height: 1.5;
+}
+
+.source-link svg {
+  display: block;
+}
+
+.tagline {
+  color: var(--ink-faint);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-soft);
+  user-select: none;
+}
+
+/* ----- shared ------------------------------------------------------------- */
+
+.panel {
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 7px 7px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  flex: 1;
+}
+
+.sub-title {
+  margin: 8px 0 3px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+.btn {
+  font: inherit;
+  padding: 2px 8px;
+  background: var(--btn);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--btn-hover);
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.btn.active {
+  background: var(--btn-on);
+  border-color: var(--accent);
+  font-weight: 700;
+}
+
+.btn.quick,
+.filter-toggle {
+  background: var(--go);
+  border-color: var(--go-edge);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.btn.quick:hover:not(:disabled),
+.filter-toggle:hover:not(:disabled) {
+  background: #45c455;
+  border-color: var(--go-edge);
+}
+
+.filter-toggle.active {
+  background: var(--accent);
+  border-color: #1565c0;
+}
+
+.icon-btn {
+  padding: 2px 6px;
+  color: var(--warn);
+}
+
+.btn:focus-visible,
+.stat-row:focus-visible,
+.cell:focus-visible,
+.card-cell:focus-visible,
+.seat:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.select,
+.percent,
+.notation {
+  font: inherit;
+  padding: 2px 4px;
+  background: var(--panel-sunken);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--ink);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.field-label {
+  color: var(--ink-soft);
+}
+
+.hint {
+  margin: 2px 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.strong {
+  font-weight: 700;
+}
+
+/* ----- top strip ---------------------------------------------------------- */
+
+.topstrip {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  padding: 0 8px;
+  flex-wrap: wrap;
+}
+
+.seats {
+  display: flex;
+  gap: 4px;
+}
+
+.seat {
+  position: relative;
+  padding: 3px 3px 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* A seat that is a dealt hand has nothing to edit, so the panel says so by
+   standing down rather than by leaving controls that refuse when pressed. The
+   matrix stays readable, because what the hand is on this board is the thing
+   worth looking at. */
+.panel-range.dealt-hand .sliders,
+.panel-range.dealt-hand .quick-row,
+.panel-range.dealt-hand .libraries,
+.panel-range.dealt-hand .notation,
+.panel-range.dealt-hand .edit-strip {
+  display: none;
+}
+
+.panel-range.dealt-hand .matrix,
+.panel-range.dealt-hand .weight-column {
+  pointer-events: none;
+}
+
+.panel-range.dealt-hand .weight-column {
+  opacity: 0.4;
+}
+
+/* A dealt hand, marked so it never reads as a range that happens to be small:
+   dashed, because it is not something you can draw on. */
+.seat.is-hand {
+  border-style: dashed;
+  border-color: var(--ink-soft);
+  background: var(--panel-sunken);
+}
+
+.seat.is-hand .seat-badge {
+  font-weight: 700;
+}
+
+/* While a hand is being dealt, the grid is picking cards for it rather than
+   thinning the deck, and says so. */
+.dead-panel.dealing .card-grid {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.deal-hand.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.card-cell.picking {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* A card in somebody's hand is gone the way a board card is, and carries a
+   mark to say it went to a seat rather than to the board. */
+.card-cell.dealt {
+  text-decoration: line-through;
+}
+
+.seat.active {
+  border-color: var(--go);
+  box-shadow: 0 0 0 1px var(--go);
+}
+
+.thumb-matrix {
+  display: grid;
+  grid-template-columns: repeat(13, 5px);
+  gap: 1px;
+}
+
+.thumb-matrix i {
+  width: 5px;
+  height: 5px;
+  background: var(--track);
+  border-radius: 1px;
+}
+
+.thumb-matrix i.on {
+  background: color-mix(in srgb, var(--select) calc(var(--weight) * 100%), #ededed);
+}
+
+.seat-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 0 3px;
+  background: var(--badge);
+  border: 1px solid var(--line-soft);
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.seat-badge.muted-badge {
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+
+/* The seat's colour, used here and wherever else a seat has to be told from the
+   other one - the equity graph, most of all. */
+/* A seat's colour comes in on `--seat`, which the strip sets from the seat's
+   own index - the same trick the paint colours use, so the bar under a seat,
+   its curve on the equity graph and its key in the legend are one colour named
+   once rather than three rules that have to agree. */
+.seat-bar {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 2px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--seat, var(--accent));
+}
+
+/* The way out of a range. Faint until the pointer is on the tile, because it
+   is the one irreversible thing in this row and should not be the first thing
+   the eye lands on - but always there to be found, which a modifier key is not. */
+.seat-drop {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: none;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--ink-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 90ms ease-out;
+}
+
+.seat-drop[hidden] {
+  display: none;
+}
+
+.seat:hover .seat-drop,
+.seat-drop:focus-visible {
+  opacity: 1;
+}
+
+.seat-drop:hover {
+  background: var(--warn);
+  color: #ffffff;
+}
+
+/* A way to get a seat rather than a seat, so it borrows the tile's shape
+   without answering to `.seat`. */
+.seat-add {
+  flex: none;
+  width: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.seat-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* In a multiway pot each line wears its seat's colour, so the readout and the
+   tiles above it are the same players in the same order. */
+.equity-line.equity-seat span:first-child::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--seat);
+}
+
+.dead-panel {
+  flex: 1 1 420px;
+  min-width: 320px;
+}
+
+.equity-panel {
+  flex: 0 0 200px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.equity-who {
+  margin: 0 0 4px;
+  font-weight: 700;
+}
+
+.equity-line {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  color: var(--ink-soft);
+}
+
+.equity-line.strong {
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+/* ----- card grids --------------------------------------------------------- */
+
+.card-grid {
+  display: grid;
+  gap: 2px;
+}
+
+.dead-grid {
+  grid-template-columns: repeat(13, minmax(0, 1fr));
+}
+
+.board-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.card-cell,
+.board-slot {
+  font: inherit;
+  font-weight: 700;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+
+.card-cell {
+  padding: 2px 0;
+  font-size: 11px;
+}
+
+.card-cell i,
+.board-slot i {
+  font-style: normal;
+}
+
+/* The suit tint belongs to tiles - a card in a grid, a board slot, a row in the
+   hotness list. A pip is a glyph inside running text and takes the colour
+   without the background; see `.pip` below. */
+.suit-h {
+  background: var(--suit-h-bg);
+  color: var(--suit-h-fg);
+}
+
+.suit-c {
+  background: var(--suit-c-bg);
+  color: var(--suit-c-fg);
+}
+
+.suit-d {
+  background: var(--suit-d-bg);
+  color: var(--suit-d-fg);
+}
+
+.suit-s {
+  background: var(--suit-s-bg);
+  color: var(--suit-s-fg);
+}
+
+.card-cell:hover:not(.taken) {
+  border-color: currentColor;
+}
+
+.card-cell.picked {
+  color: #ffffff;
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+.card-cell.picked.suit-h {
+  background: var(--suit-h-solid);
+}
+
+.card-cell.picked.suit-c {
+  background: var(--suit-c-solid);
+}
+
+.card-cell.picked.suit-d {
+  background: var(--suit-d-solid);
+}
+
+.card-cell.picked.suit-s {
+  background: var(--suit-s-solid);
+}
+
+.card-cell.taken {
+  opacity: 0.28;
+  cursor: default;
+}
+
+/* ----- board panel -------------------------------------------------------- */
+
+.street-arrow {
+  padding: 0 5px;
+}
+
+.street-name {
+  text-align: center;
+  text-transform: capitalize;
+}
+
+.board-slots {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  margin-bottom: 5px;
+}
+
+.board-slot {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  font-size: 12px;
+  flex-direction: column;
+  gap: 0;
+}
+
+.board-slot.empty {
+  background: repeating-linear-gradient(45deg, var(--slot-a) 0 4px, var(--slot-b) 4px 8px);
+  border: 1px dashed var(--line);
+  cursor: default;
+}
+
+.board-slot.hidden-card {
+  opacity: 0.3;
+}
+
+.board-slot[data-street]::after {
+  content: attr(data-street);
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  font-size: 9px;
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+.board-actions {
+  margin-top: 6px;
+}
+
+.board-actions .btn {
+  flex: 1;
+  background: var(--go);
+  border-color: var(--go-edge);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.tally {
+  margin: 8px 0 0;
+  color: var(--ink-soft);
+  line-height: 1.35;
+}
+
+/* ----- range panel -------------------------------------------------------- */
+
+.weight-label {
+  font-variant-numeric: tabular-nums;
+}
+
+.brushes {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.brush {
+  padding: 1px 4px;
+  font-size: 10px;
+}
+
+.brush.active {
+  background: var(--select);
+  border-color: var(--select-edge);
+  font-weight: 700;
+}
+
+.matrix-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.weight-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 46px;
+}
+
+.weight-value {
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.weight-slider {
+  flex: 1;
+  width: 16px;
+  min-height: 120px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  appearance: slider-vertical;
+  -webkit-appearance: slider-vertical;
+  accent-color: var(--select-edge);
+}
+
+.brushes {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+}
+
+.matrix {
+  display: grid;
+  grid-template-columns: repeat(13, minmax(0, 1fr));
+  gap: 2px;
+  flex: 1;
+  user-select: none;
+  touch-action: none;
+}
+
+/*
+ * Three regions, three colours: pairs down the diagonal, suited above it, offsuit
+ * below. A cell is filled from the bottom in proportion to its weight, so a hand
+ * played half the time is visibly half a cell rather than a paler shade.
+ *
+ * The three colours are deliberately quiet. They say which region a cell is in,
+ * which the reader already knows from where it sits - so they are the background
+ * to everything that gets drawn on top of them, not a competitor for it.
+ *
+ * What separates them from the grey of a filtered-out hand is lightness, not
+ * saturation: the three states form a ladder away from the ground - empty,
+ * filtered, in the range - so the pale blue of a pocket pair and the grey next
+ * to it never have to be told apart by hue. Turning the three colours back up
+ * would have worked too, and would have undone the point of keeping them quiet.
+ */
+.cell {
+  --paint: var(--paint-offsuit);
+  position: relative;
+  aspect-ratio: 1.1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: clamp(9px, 0.85vw, 12px);
+  font-weight: 600;
+  padding: 0;
+  border: 1px solid var(--cell-edge);
+  border-radius: 3px;
+  cursor: crosshair;
+  background: var(--cell-empty);
+  color: var(--cell-ink);
+  overflow: hidden;
+}
+
+.cell.pair {
+  --paint: var(--paint-pair);
+}
+
+.cell.suited {
+  --paint: var(--paint-suited);
+}
+
+.cell.offsuit {
+  --paint: var(--paint-offsuit);
+}
+
+/*
+ * A cell says two things at right angles, so neither has to give way.
+ *
+ * Filled from the bottom: how much of the hand is in the range, which is what a
+ * fractional weight means. Filled from the left: how much of that survived the
+ * street filters. The part outside the range carries no colour at all - which
+ * region of the matrix a hand you are not holding sits in tells you nothing -
+ * and the part the filters removed carries grey, because it is out of the range
+ * now whatever it used to be.
+ */
+.cell.on {
+  background: linear-gradient(
+    to top,
+    var(--paint) 0 var(--fill),
+    var(--cell-empty) var(--fill) 100%
+  );
+  border-color: var(--cell-edge-on);
+  color: var(--cell-ink-on);
+}
+
+.cell.on.filtered {
+  background:
+    linear-gradient(to top, var(--paint) 0 var(--fill), var(--cell-empty) var(--fill) 100%) 0 0 /
+      var(--passing, 0%) 100% no-repeat,
+    linear-gradient(to top, var(--cell-filtered) 0 var(--fill), var(--cell-empty) var(--fill) 100%);
+}
+
+/*
+ * The third axis, and the last one left: down from the top.
+ *
+ * A hovered statistic asks "where is this hand?", and the answer is a share of
+ * the cell - one flushdraw in twelve. Washing the whole cell at a twelfth of
+ * full strength answered it in a tint nobody could see; covering a twelfth of
+ * the cell at full strength answers it at full contrast and says the same
+ * number. The band comes down from the top, so it meets the weight rising from
+ * the bottom and the filter coming in from the left without any of the three
+ * having to give way.
+ */
+.cell.lit::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: var(--glow, 0%);
+  min-height: 2px;
+  background: var(--lit);
+}
+
+/* The colours a cell holds, as a strip along its foot - one stripe per colour,
+   in proportion, so a cell split between two reads as split. Only drawn when
+   more than one colour is in use: with one there is nothing to tell apart, and
+   an underline that always means the same thing is noise. */
+.cell.grouped::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 4px;
+  background: var(--groups, transparent);
+}
+
+/* A hand the filters removed entirely keeps its place and its label, greyed. */
+.cell.on.filtered .cell-count {
+  opacity: 0.7;
+}
+
+.cell-label {
+  position: relative;
+  z-index: 1;
+}
+
+.cell-count {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  z-index: 1;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.1;
+  opacity: 0.7;
+}
+
+/* The pips a suited cell is holding, overlapping: four at a readable size do
+   not fit a cell side by side, and it is the set that is being read. */
+.cell-suits {
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  z-index: 1;
+  display: flex;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.cell-suits .pip {
+  font-size: 9px;
+  font-style: normal;
+  margin-right: -2px;
+}
+
+.cell-suits .pip:last-child {
+  margin-right: 0;
+}
+
+/* The shift offer, under the pointer where it is being made. */
+.shift-hint {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  z-index: 2;
+  font-size: 8px;
+  font-style: normal;
+  line-height: 1.2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease-out;
+}
+
+.cell:hover .shift-hint,
+.stat-row:hover .shift-hint,
+.stat-row.hovered .shift-hint {
+  opacity: 0.75;
+}
+
+.stat-row .shift-hint {
+  top: 50%;
+  right: 1px;
+  transform: translateY(-50%);
+  font-size: 9px;
+}
+
+.summary {
+  margin: 6px 0 4px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.sliders {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.slider-track {
+  position: relative;
+  flex: 1;
+  height: 18px;
+}
+
+.slider-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 6px;
+  height: 6px;
+  background: var(--track);
+  border-radius: 3px;
+}
+
+/* The band between the handles, so the selected window is visible. */
+.slider-span {
+  position: absolute;
+  top: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 3px;
+}
+
+.slider {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  margin: 0;
+  background: none;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.slider::-webkit-slider-runnable-track {
+  height: 6px;
+  margin-top: 6px;
+  background: transparent;
+  border-radius: 3px;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 11px;
+  height: 11px;
+  margin-top: 3.5px;
+  border-radius: 50%;
+  border: 1px solid #ffffff;
+  background: var(--accent);
+  cursor: grab;
+}
+
+.slider-cut::-webkit-slider-thumb {
+  background: var(--warn);
+}
+
+.slider::-moz-range-track {
+  height: 6px;
+  background: transparent;
+  border-radius: 3px;
+}
+
+.slider::-moz-range-thumb {
+  pointer-events: auto;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1px solid #ffffff;
+  background: var(--accent);
+  cursor: grab;
+}
+
+.slider-cut::-moz-range-thumb {
+  background: var(--warn);
+}
+
+.percent {
+  width: 58px;
+  text-align: right;
+}
+
+.quick-row {
+  margin-top: 6px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 3px;
+}
+
+/* The value ranges are a different kind of button from "every suited hand", so
+   they get their own line rather than being squeezed into that one. */
+.quick-row.value-row {
+  margin-top: 3px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* ----- preflop library ---------------------------------------------------- */
+
+/* A single depth still gets a chip rather than a clickable heading: a chip is a
+   button and looks like one. It just must not stretch to fill the row. */
+.stacks .stack-chip {
+  flex: 0 1 auto;
+  min-width: 56px;
+}
+
+.libraries {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A game nobody has picked in is a heading and its depths, nothing more; the
+   seats appear under the one that is open. */
+.library-cash {
+  padding-top: 4px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.library-cash .library-label {
+  color: var(--ink-soft);
+}
+
+.library-cash.open .library-label {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.library {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 3px 6px;
+  margin-top: 6px;
+}
+
+.library-label {
+  font-weight: 700;
+  cursor: help;
+}
+
+.chips {
+  display: flex;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+
+.stack-chip.active {
+  background: var(--accent);
+  border-color: #1565c0;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.seat-chip {
+  background: var(--chip);
+  border-color: var(--chip-edge);
+}
+
+.seat-chip:hover:not(:disabled) {
+  background: var(--btn-hover);
+}
+
+.notation {
+  width: 100%;
+  margin-top: 6px;
+  resize: vertical;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+/* ----- statistics panel --------------------------------------------------- */
+
+.stats-body {
+  background: var(--panel-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 2px 6px 6px;
+}
+
+.stat-block + .stat-block {
+  border-top: 1px solid var(--line-soft);
+}
+
+/* A colour that continues only part of the time carries the number, so the
+   palette reads as the whole strategy and not just as seven colours. */
+.swatch.partial::after {
+  content: attr(data-share);
+  position: absolute;
+  right: -1px;
+  bottom: -3px;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ink-soft);
+}
+
+.swatch {
+  position: relative;
+}
+
+.pass-row[hidden] {
+  display: none;
+}
+
+/* Right under the palette and in the colour it is about, because it is a
+   property of that colour: hidden away it reads as another stray slider, and
+   the whole point is that the reader can see what the colour now means. */
+.pass-row {
+  margin-top: 4px;
+  padding: 3px 6px;
+  align-items: center;
+  gap: 6px;
+  border-radius: 3px;
+  background: var(--panel-sunken);
+}
+
+.pass-label {
+  flex: none;
+  color: var(--mark);
+  font-weight: 700;
+  text-transform: none;
+}
+
+.pass-slider {
+  position: static;
+  flex: 1;
+  min-width: 70px;
+  pointer-events: auto;
+}
+
+.pass-slider::-webkit-slider-thumb {
+  background: var(--mark);
+}
+
+.pass-slider::-moz-range-thumb {
+  background: var(--mark);
+}
+
+.pass-value {
+  min-width: 34px;
+  text-align: right;
+  color: var(--ink-soft);
+}
+
+/* The other range's number for the same statistic, in that seat's colour so
+   the column and the seat tile at the top are plainly the same range. */
+.stat-versus {
+  padding-left: 6px;
+  text-align: right;
+  color: var(--seat, var(--ink-soft));
+  opacity: 0.85;
+}
+
+.stat-versus[hidden] {
+  display: none;
+}
+
+/* Heavier where the other range is the one ahead: which way the difference
+   goes is the thing being read. */
+.stat-versus.ahead {
+  font-weight: 700;
+  opacity: 1;
+}
+
+/* In the output panel it sits beside the title rather than among the tabs,
+   because it is not a view - it says what the views are about. */
+.versus-output {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* Measured against the whole table, the other curve is nobody's, so it is drawn
+   in the ink of the panel rather than in a seat's colour. */
+.eq-graph .curve.curve-field {
+  stroke: var(--ink-soft);
+  stroke-dasharray: 4 3;
+}
+
+.eq-key.key-field::before {
+  border-top-color: var(--ink-soft);
+}
+
+.versus-button.active {
+  color: var(--seat);
+  border-color: var(--seat);
+}
+
+/* A fourth column appears with the comparison, so the grid grows a track for
+   it rather than letting it wrap onto a second line. */
+.stat-row:has(.stat-versus:not([hidden])) {
+  grid-template-columns: 34px 104px 1fr 46px;
+}
+
+.stat-row {
+  display: grid;
+  grid-template-columns: 34px 104px 1fr;
+  align-items: center;
+  gap: 5px;
+  /* The shift hint sits over the row rather than in it: this is a three-column
+     grid, and a fourth child would wrap onto a second line and double the
+     height of every row in the panel. */
+  position: relative;
+  padding: 1px 2px;
+  border-radius: 2px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+}
+
+.stat-row[hidden] {
+  display: none;
+}
+
+.stat-row:hover,
+.stat-row.hovered {
+  background: var(--row-hover);
+}
+
+.filter-marks {
+  display: inline-flex;
+  gap: 1px;
+}
+
+.filter-mark {
+  width: 16px;
+  padding: 0;
+  font: inherit;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--mark-off);
+  cursor: pointer;
+}
+
+.filter-mark:hover {
+  border-color: var(--line);
+}
+
+.filter-mark[hidden] {
+  display: none;
+}
+
+.mark-pass.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.mark-delete.on {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #ffffff;
+}
+
+.clear-filters {
+  color: var(--warn);
+}
+
+.theme-toggle {
+  min-width: 72px;
+}
+
+/* Staged but not applied: the marks stay readable, just visibly inactive. */
+.stats-body.filters-off .filter-mark.on {
+  opacity: 0.55;
+}
+
+.stat-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-row.filter-pass .stat-label {
+  font-weight: 700;
+}
+
+.stat-row.filter-delete .stat-label {
+  text-decoration: line-through;
+  color: var(--ink-faint);
+}
+
+.bar-track {
+  position: relative;
+  display: block;
+  height: 15px;
+  background: var(--track);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: block;
+  background: var(--made);
+  transition: width 90ms linear;
+}
+
+.block-draw .bar {
+  background: var(--draw);
+}
+
+.block-combination .bar {
+  background: var(--combination);
+}
+
+/* The palette: the colour every paint uses until another is picked. */
+.palette {
+  gap: 2px;
+  margin: 4px 0 2px;
+}
+
+.palette[hidden] {
+  display: none;
+}
+
+.swatch {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: none;
+  /* The colour comes in on `--mark`, which the panel sets from the engine's
+     palette. Nothing here keeps a list of which name is which colour. */
+  color: var(--mark, var(--group-0));
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.swatch.colour-none {
+  color: var(--warn);
+}
+
+.swatch.active {
+  border-color: currentColor;
+  background: var(--panel-sunken);
+}
+
+.palette-action {
+  flex: none;
+  margin-left: 4px;
+  padding: 0 5px;
+  font-size: 11px;
+}
+
+/* One marker per row: a funnel in the colour its hands carry, or a gear when
+   they do not agree on one. */
+.filter-mark {
+  flex: none;
+  width: 15px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--mark, var(--group-0));
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+  cursor: pointer;
+}
+
+.filter-mark.mark-check {
+  color: var(--go);
+}
+
+/* The gear says the reader picked this category over by hand. It has to be
+   legible at 11px next to a funnel, so it gets the room the funnel does not
+   need. */
+.filter-mark.mark-mixed {
+  width: 17px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.1;
+}
+
+.filter-mark.mark-empty {
+  opacity: 0.3;
+}
+
+.stat-row.editing {
+  outline: 1px solid var(--accent);
+  border-radius: 3px;
+}
+
+/* One button per dealt street. Pressed, it freezes the painted hands as the
+   range going forward; pressed again, it lets them all back. */
+.streets {
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.streets[hidden] {
+  display: none;
+}
+
+.street-filter {
+  flex: 1;
+  padding: 3px 4px;
+}
+
+.street-filter[hidden] {
+  display: none;
+}
+
+/* Red when the filter is off, green when it is on - and the count either way. */
+.lamp {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--bad);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25) inset;
+}
+
+.lamp.on {
+  background: #6cff8a;
+}
+
+.street-filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.street-filter.active {
+  background: var(--go);
+  border-color: var(--go-edge);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.stat-row.empty .stat-label,
+.stat-row.empty .stat-value {
+  color: var(--ink-faint);
+}
+
+.stat-row.empty .filter-mark {
+  opacity: 0.45;
+}
+
+.stat-value {
+  position: absolute;
+  left: 4px;
+  top: 0;
+  line-height: 15px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  mix-blend-mode: luminosity;
+}
+
+.share-row {
+  margin-top: 8px;
+  gap: 6px;
+}
+
+.share-row[hidden] {
+  display: none;
+}
+
+.share-slider {
+  position: static;
+  flex: 1;
+  min-width: 80px;
+  pointer-events: auto;
+}
+
+.share-slider::-webkit-slider-runnable-track {
+  background: var(--track);
+}
+
+.share-slider::-moz-range-track {
+  background: var(--track);
+}
+
+.cut-clear {
+  flex: none;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+.cut-clear[hidden] {
+  display: none;
+}
+
+.share-row.stale-cut .share-value {
+  color: var(--accent);
+}
+
+.share-value {
+  min-width: 78px;
+  text-align: right;
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.stats-footer {
+  margin-top: 6px;
+}
+
+.filter-toggle {
+  width: 100%;
+  padding: 5px;
+}
+
+/* Three short lines, the way Flopzilla writes them. It used to hold a dump of
+   the range in notation, which was a wall of text in the one corner nobody
+   reads a range from. */
+.effective {
+  display: flex;
+  flex-direction: column;
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----- workspace ---------------------------------------------------------- */
+
+/*
+ * Three columns, each followed by a gutter that resizes the panel to its left.
+ * Widths come from the store so they can be dragged and remembered.
+ */
+.workspace {
+  display: grid;
+  grid-template-columns:
+    var(--w-range, 640px) 7px
+    var(--w-board, 168px) 7px
+    var(--w-stats, 400px) 7px
+    var(--w-output, 420px) 7px;
+  justify-content: start;
+  padding: 0 8px 10px;
+  align-items: start;
+}
+
+.gutter {
+  align-self: stretch;
+  min-height: 60px;
+  cursor: col-resize;
+  border-radius: 3px;
+  background: transparent;
+  position: relative;
+}
+
+.gutter::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 3px;
+  width: 1px;
+  background: var(--line);
+}
+
+.gutter:hover,
+.gutter:focus-visible {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: none;
+}
+
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+@media (max-width: 1080px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .gutter {
+    display: none;
+  }
+
+  /* Stacked, the matrix would otherwise take the whole width and dwarf the rest. */
+  .matrix-frame {
+    max-width: 560px;
+  }
+}
+
+/*
+ * A phone.
+ *
+ * Everything already stacks into one column by here; what did not fit was the
+ * title bar, which is a single row of ten buttons and was three times the width
+ * of the screen. So it wraps, and the parts that are decoration rather than
+ * controls - the tagline, the flexible spacer that pushes the actions right -
+ * step out of the way.
+ *
+ * The matrix is the thing somebody came to look at, so it gets the whole width
+ * rather than the 560px cap that keeps it from dwarfing its neighbours in a
+ * stacked desktop layout.
+ */
+/* The title bar is one row of ten buttons, about 860px of them, so it wraps as
+   soon as the window is narrower than that rather than only on a phone. */
+@media (max-width: 900px) {
+  .menubar {
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 5px 8px;
+  }
+
+  .menubar .spacer {
+    flex-basis: 100%;
+    height: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .menubar .tagline {
+    display: none;
+  }
+
+  .matrix-frame {
+    max-width: none;
+  }
+
+  .workspace {
+    padding: 0 5px 8px;
+  }
+
+  /* The panels are stacked, so a minimum width that made sense in a column
+     beside two others only forces the page sideways here. */
+  .dead-panel,
+  .panel-board,
+  .panel-stats,
+  .panel-output {
+    min-width: 0;
+  }
+
+  /* A row of thirteen cards is the one grid that cannot shrink to a phone, so
+     it scrolls inside itself rather than taking the page with it. */
+  .dead-panel .card-grid,
+  .board-panel .card-grid {
+    overflow-x: auto;
+  }
+
+  /* Five buttons across a phone clips the longest word off the middle one, and
+     a button whose label is cut is worse than a button on the next line. */
+  .quick-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  /* At a cell this size the label and the combo count are drawn on top of each
+     other. The label is the part that names the hand, so the count goes; the
+     panel on the right is where the counting is read anyway. */
+  .cell-count {
+    display: none;
+  }
+
+  /* The pips would land on the label for the same reason. */
+  .cell-suits .pip {
+    font-size: 8px;
+  }
+}
+
+/* ----- toast -------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  background: var(--toast);
+  color: var(--toast-ink);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}
+
+/* ----- suit strip --------------------------------------------------------- */
+
+.suit-strip[hidden] {
+  display: none;
+}
+
+.edit-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  margin: 4px 0;
+  padding: 4px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--panel-sunken);
+  max-height: 128px;
+  overflow: auto;
+}
+
+.edit-strip[hidden] {
+  display: none;
+}
+
+.combo-chip.paint-none {
+  opacity: 0.55;
+}
+
+/* A painted chip wears its colour along the foot, like a cell does. */
+.combo-chip[data-colour]:not([data-colour="none"]) {
+  border-color: var(--mark);
+  box-shadow: inset 0 -3px 0 var(--mark);
+}
+
+.suit-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 5px;
+  padding: 4px 5px;
+  background: var(--panel-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+}
+
+.combo-chip {
+  padding: 2px 5px;
+  font-weight: 700;
+  background: var(--btn);
+  opacity: 0.45;
+}
+
+.combo-chip.on {
+  opacity: 1;
+  border-color: currentColor;
+}
+
+.combo-chip i {
+  font-style: normal;
+}
+
+.suit-close {
+  margin-left: auto;
+  padding: 1px 6px;
+}
+
+.cell.open {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.cell.peeking {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ----- suit breakdown ----------------------------------------------------- */
+
+/*
+ * The hovered cell, one dimension further in.
+ *
+ * A matrix cell is a hand with its suits collapsed, and most of the time that
+ * is the right summary. When it is not - a flushdraw that is only there in
+ * hearts, a filter that took three of the four - the breakdown opens the cell
+ * back up into the grid it always was: the higher card's suit down the side,
+ * the lower card's across the top. Each little cell is filled by exactly the
+ * rules the big one uses, because it is the same fact at a finer grain, and a
+ * second set of rules to learn would defeat the point.
+ */
+.matrix-frame {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.suit-popup {
+  position: absolute;
+  z-index: 20;
+  top: calc(var(--row) * (100% / 13) + 100% / 13);
+  left: calc(var(--col) * (100% / 13));
+  width: 148px;
+  padding: 5px 6px 6px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+  pointer-events: auto;
+}
+
+.suit-popup[hidden] {
+  display: none;
+}
+
+/* Near an edge it opens the other way, so it never leaves the panel. */
+.suit-popup.to-left {
+  left: auto;
+  right: calc((12 - var(--col)) * (100% / 13));
+}
+
+.suit-popup.to-top {
+  top: auto;
+  bottom: calc((12 - var(--row)) * (100% / 13) + 100% / 13);
+}
+
+.suit-popup.pinned {
+  border-width: 2px;
+}
+
+.suit-popup-head {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+.suit-popup-hint {
+  margin-left: auto;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+
+.suit-grid {
+  display: grid;
+  grid-template-columns: 12px repeat(4, minmax(0, 1fr));
+  gap: 2px;
+}
+
+/* A suited hand: four combinations, one row, the header over each. */
+.suit-grid.one-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.suit-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.suit-cell {
+  aspect-ratio: 1;
+  position: relative;
+  padding: 0;
+  border: 1px solid var(--cell-edge);
+  border-radius: 2px;
+  background: var(--cell-empty);
+  cursor: crosshair;
+  overflow: hidden;
+}
+
+/* A slot the hand has no combination in - the shape of the class, drawn: a
+   suited hand is a diagonal, a pair a triangle, an offsuit hand the rest. */
+.suit-cell.absent {
+  border-color: transparent;
+  background: transparent;
+  cursor: default;
+}
+
+.suit-cell.on {
+  background: linear-gradient(
+    to top,
+    var(--paint-pair) 0 var(--fill),
+    var(--cell-empty) var(--fill) 100%
+  );
+  border-color: var(--cell-edge-on);
+}
+
+.suit-cell.on.filtered {
+  background:
+    linear-gradient(to top, var(--paint-pair) 0 var(--fill), var(--cell-empty) var(--fill) 100%) 0
+      0 / var(--passing, 0%) 100% no-repeat,
+    linear-gradient(to top, var(--cell-filtered) 0 var(--fill), var(--cell-empty) var(--fill) 100%);
+}
+
+/* One combination either matches the hovered statistic or it does not, so here
+   the band is a fixed mark rather than a proportion of anything. */
+.suit-cell.lit::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 34%;
+  background: var(--lit);
+}
+
+.suit-cell.grouped::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 3px;
+  background: var(--mark);
+}
+
+/* A combination one of whose cards is on the table cannot be held at all. */
+.suit-cell.dealt {
+  opacity: 0.3;
+  cursor: not-allowed;
+  background-image: repeating-linear-gradient(45deg, var(--line-soft) 0 2px, transparent 2px 4px);
+}
+
+.action-label {
+  font-size: 10px;
+  text-align: right;
+}
+
+/* ----- output panel ------------------------------------------------------- */
+
+.output-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.output-tab {
+  padding: 3px 2px;
+  font-size: 11px;
+}
+
+.output-body {
+  background: var(--panel-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 6px 8px 8px;
+  min-height: 120px;
+}
+
+.scroll-x {
+  overflow-x: auto;
+}
+
+/* overlap */
+
+.overlap-table {
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.overlap-table th,
+.overlap-table td {
+  padding: 1px 3px;
+  border: 1px solid var(--line-soft);
+}
+
+/* Full labels, rotated: a clipped header is worse than a tall one. */
+.overlap-col {
+  height: 104px;
+  padding: 2px 1px;
+  vertical-align: bottom;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+
+.overlap-col span {
+  display: block;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  white-space: nowrap;
+}
+
+.axes-row {
+  margin-bottom: 6px;
+}
+
+.axes-row .chip {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+}
+
+.axes-row .chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.overlap-row {
+  text-align: left;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+.overlap-cell {
+  text-align: right;
+  min-width: 22px;
+  background: color-mix(in srgb, var(--made) calc(var(--strength) * 72%), transparent);
+  color: var(--ink);
+}
+
+.overlap-cell.diagonal {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* equity matrix */
+
+.eq-matrix {
+  display: grid;
+  grid-template-columns: repeat(13, minmax(0, 1fr));
+  gap: 1px;
+}
+
+.eq-cell {
+  position: relative;
+  aspect-ratio: 1.1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--cell-empty);
+  border: 1px solid var(--cell-edge);
+}
+
+.eq-cell.on {
+  background: color-mix(in srgb, var(--good) calc(var(--equity) * 100%), var(--bad));
+  border-color: var(--cell-edge-on);
+}
+
+/* The hand, named where the range matrix names it. */
+.eq-name {
+  font-size: clamp(7px, 0.62vw, 10px);
+  font-weight: 600;
+  color: var(--cell-ink);
+}
+
+.eq-cell.on .eq-name {
+  color: #ffffff;
+}
+
+/* And its equity in the corner, where the combination count sits next door. */
+.eq-value {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-size: clamp(6px, 0.52vw, 9px);
+  line-height: 1.2;
+  color: #ffffff;
+  opacity: 0.92;
+}
+
+/* The die on the buttons that roll one, drawn rather than set as a character:
+   the dice glyphs live in a font block plenty of systems do not have. */
+.die {
+  width: 11px;
+  height: 11px;
+  display: block;
+}
+
+.die-body {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
+
+.die-pip {
+  fill: currentColor;
+}
+
+.deal-flop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 4px;
+}
+
+.board-actions .btn .die {
+  margin-right: 5px;
+}
+
+.board-actions .btn:last-of-type {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* A suit pip inside a line of text, coloured the way the card grids colour it. */
+.pip {
+  font-style: normal;
+  padding-left: 0.5px;
+  /* A pip is a glyph, not a tile: it takes the suit's colour from the rules
+     below and none of the suit tint the card grids want. */
+  background: none;
+}
+
+.pip.suit-h {
+  color: var(--suit-h-solid);
+}
+
+.pip.suit-d {
+  color: var(--suit-d-solid);
+}
+
+.pip.suit-c {
+  color: var(--suit-c-solid);
+}
+
+.pip.suit-s {
+  color: var(--suit-s-solid);
+}
+
+/* equity graph */
+
+.eq-graph {
+  display: block;
+  width: 100%;
+  height: 150px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+}
+
+.eq-graph .grid {
+  stroke: var(--line-soft);
+  stroke-width: 0.4;
+}
+
+.eq-graph .grid.mid {
+  stroke: var(--line);
+  stroke-dasharray: 2 2;
+}
+
+.eq-graph .cursor {
+  stroke: var(--ink-faint);
+  stroke-width: 0.5;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+}
+
+/* The pie: how much of the range sits in each colour. */
+.pie {
+  display: block;
+  width: 100%;
+  max-width: 220px;
+  margin: 8px auto 12px;
+}
+
+.pie .slice {
+  stroke: var(--panel);
+  stroke-width: 0.012;
+}
+
+/* A slice and its key are one colour said twice, and the pie already knows
+   which slot it is drawing, so it says so outright. */
+.slice,
+.pie-key {
+  color: var(--mark);
+  fill: var(--mark);
+}
+
+.pie-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pie-key {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pie-key::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.pie-name {
+  flex: 1;
+  color: var(--ink-soft);
+}
+
+.pie-key .num {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.overlap-cell.actionable {
+  cursor: pointer;
+}
+
+.overlap-cell.actionable:hover {
+  outline: 2px solid var(--cut-edge);
+  outline-offset: -2px;
+}
+
+/* The cheat sheet. One key opens it, one closes it, and it is built from the
+   same table the keyboard runs on, so the two cannot drift apart. */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.sheet-backdrop[hidden] {
+  display: none;
+}
+
+.sheet {
+  max-width: 640px;
+  max-height: 100%;
+  overflow: auto;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.sheet-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+}
+
+.sheet-body {
+  columns: 2;
+  column-gap: 26px;
+}
+
+.sheet-group + .sheet-group {
+  margin-top: 10px;
+}
+
+.sheet-group {
+  break-inside: avoid;
+}
+
+.sheet-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 0;
+}
+
+.sheet-row kbd {
+  justify-self: start;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: var(--panel-sunken);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.sheet-note {
+  grid-column: 2;
+  color: var(--ink-faint);
+  font-style: normal;
+  font-size: 11px;
+}
+
+.sheet-foot {
+  margin: 10px 0 0;
+  color: var(--ink-faint);
+}
+
+/* One colour per seat, the same one the strip at the top uses: A is the accent,
+   B is the warning red. Which seat is selected changes which curve is drawn
+   solid, not which colour it is.
+
+   Everything the curve is drawn with belongs in this one rule. A second rule
+   for the same selector wins on order without being any more specific, and
+   since `--made` and `--accent` are the same blue it takes the seats back to
+   one colour without looking wrong anywhere else. */
+.eq-graph .curve {
+  fill: none;
+  stroke: var(--seat, var(--accent));
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.eq-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 2px 0 0;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.eq-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.eq-key::before {
+  content: "";
+  width: 12px;
+  height: 0;
+  border-top: 2px solid var(--seat, var(--accent));
+}
+
+.eq-readout {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  min-height: 1.3em;
+}
+
+.eq-readout.live {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* hotness */
+
+.hot-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  max-width: 260px;
+}
+
+/* Every card still to come, coloured by what it does and labelled with how
+   much - "green" is a direction, "54.27%" is an amount. */
+.hot-name {
+  display: block;
+  font-weight: 600;
+}
+
+.hot-value {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.hot-current {
+  margin: 6px 0 2px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.hot-table {
+  max-height: 260px;
+  overflow: auto;
+  border-top: 1px solid var(--line-soft);
+}
+
+.hot-row {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  gap: 6px;
+  padding: 1px 4px;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
+
+.hot-row.helps {
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+
+.hot-rank {
+  color: var(--ink-faint);
+  text-align: right;
+}
+
+/* Under the curve, every hand it is made of. */
+.eq-table {
+  max-height: 240px;
+  overflow: auto;
+  margin-top: 6px;
+  border-top: 1px solid var(--line-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.eq-row {
+  display: grid;
+  grid-template-columns: 30px 1fr repeat(3, 56px);
+  gap: 4px;
+  padding: 1px 4px;
+  background: color-mix(in srgb, var(--good) calc(var(--heat, 0) * 26%), transparent);
+}
+
+.eq-row span:first-child {
+  color: var(--ink-faint);
+  text-align: right;
+}
+
+.eq-row span:not(:first-child):not(:nth-child(2)) {
+  text-align: right;
+}
+
+.eq-head {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.hot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 1px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.15;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--good) calc(var(--heat) * 100%), var(--bad));
+  color: #ffffff;
+}
+
+/* A card the board already took keeps its place so the grid still reads as a
+   deck, but it has nothing to say. */
+.hot-card.gone {
+  background: var(--panel-sunken);
+  border: 1px dashed var(--line-soft);
+}
+
+.hot-card i {
+  font-style: normal;
+}
+
+/* flop breakdown */
+
+.stacked-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.panel-flops {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.panel-flops.folded {
+  max-height: none;
+  overflow: visible;
+}
+
+.panel-flops .panel-head {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+
+.fold {
+  flex: none;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.flops-summary {
+  margin-left: auto;
+  color: var(--ink-faint);
+}
+
+.deal-flop {
+  flex: none;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.flop-row.current {
+  background: var(--line-soft);
+  border-radius: 3px;
+}
+
+.flop-row {
+  display: grid;
+  grid-template-columns: auto 116px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
+}
+
+.flop-label {
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flop-row .bar-track {
+  height: 14px;
+}
+
+.flop-row .bar {
+  background: var(--draw);
+}
+
+/* ----- preflop mode ------------------------------------------------------- */
+
+.panel-stats.preflop-mode .filter-toggle {
+  background: var(--accent);
+  border-color: var(--accent);
+}

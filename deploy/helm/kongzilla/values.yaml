@@ -1,0 +1,108 @@
+replicaCount: 2
+
+image:
+  repository: kongzilla
+  pullPolicy: IfNotPresent
+  tag: latest
+  digest: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101
+  runAsGroup: 101
+  fsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+# Visit statistics. A separate deployment behind /api/ on the same host, so the
+# page reports first-party and nothing is blocked or handed to a third party.
+beacon:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: kongzilla-beacon
+    # Defaults to the site's tag, so the two are always released together.
+    tag: ""
+  redis:
+    # Where to find a Redis URL, when the visitor set should be shared across
+    # replicas and survive a restart. Without one the count is exact but
+    # per-process, which is why replicaCount is 1.
+    secretName: ""
+    secretKey: url
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    additionalLabels:
+      release: kube-prometheus-stack
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      memory: 96Mi
+
+gateway:
+  enabled: false
+  host: kongzilla.leonid.sh
+  dnsTarget: gateway.leonid.sh
+  clusterIssuer: yc-clusterissuer
+  aliases: []
+  parent:
+    name: public
+    namespace: envoy-gateway-system
+    httpSectionName: http
+
+# The whole app is static: an engine compiled to WebAssembly and a page that
+# drives it. Nothing is computed server side, so this needs very little.
+resources:
+  requests:
+    cpu: 10m
+    memory: 24Mi
+  limits:
+    memory: 64Mi
+
+probes:
+  readiness:
+    initialDelaySeconds: 2
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 20
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: ScheduleAnyway

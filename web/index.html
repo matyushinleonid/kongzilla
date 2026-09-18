@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <title>Kongzilla — Free Flopzilla Alternative, Hold'em Range Analysis</title>
+    <meta
+      name="description"
+      content="Free, open-source Hold'em range and board analysis in the browser. Enter a range, enter a flop, see what it hits, filter it down. A Flopzilla clone with no install and no account."
+    />
+    <link rel="canonical" href="https://kongzilla.leonid.sh/" />
+    <!-- The app itself is English only; the written pages are the ones with a
+         Russian version, and each declares its own pair. -->
+    <link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Kongzilla" />
+    <meta property="og:title" content="Kongzilla — free Hold'em range analysis in the browser" />
+    <meta
+      property="og:description"
+      content="Enter a range, enter a flop, see what it hits. An open-source Flopzilla alternative that runs in the browser — no install, no account, nothing leaves your machine."
+    />
+    <meta property="og:url" content="https://kongzilla.leonid.sh/" />
+    <meta property="og:image" content="https://kongzilla.leonid.sh/logo.png" />
+    <meta name="twitter:card" content="summary" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Kongzilla",
+        "url": "https://kongzilla.leonid.sh/",
+        "applicationCategory": "GameApplication",
+        "operatingSystem": "Any, in a web browser",
+        "description": "Open-source Texas Hold'em range and board analysis. Enter a range, enter a flop, see what the range hits, then filter it down to the hands that continue.",
+        "license": "https://opensource.org/licenses/MIT",
+        "isAccessibleForFree": true,
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "sameAs": ["https://github.com/matyushinleonid/kongzilla"]
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app" class="loading">Loading engine…</div>
+    <!--
+      The app is the page, so a crawler that does not run scripts would see an
+      empty div. This says what the tool is in plain HTML and points at the
+      written pages, which are static and need no script at all.
+    -->
+    <noscript>
+      <div class="wrap">
+        <h1>Kongzilla — Hold'em range and board analysis</h1>
+        <p>
+          Kongzilla is a free, open-source range analyser for Texas Hold'em: enter a range, enter a
+          flop, and read what the range actually hits — the made-hand ladder, the draws and the
+          combinations — then filter it down to the hands that would keep going. It is an open
+          alternative to Flopzilla that runs in the browser, with no install and no account.
+        </p>
+        <p>It needs JavaScript and WebAssembly. Meanwhile, these pages are plain HTML:</p>
+        <ul>
+          <li>
+            <a href="https://kongzilla.leonid.sh/flopzilla-alternative/"
+              >A free Flopzilla alternative that runs in your browser</a
+            >
+          </li>
+          <li>
+            <a href="https://kongzilla.leonid.sh/what-is-flopzilla/"
+              >What Flopzilla does, and why range analysis works</a
+            >
+          </li>
+          <li><a href="https://kongzilla.leonid.sh/guide/">Using Kongzilla</a></li>
+          <li lang="ru">
+            <a href="https://kongzilla.leonid.sh/ru/analog-flopzilla/" hreflang="ru"
+              >Бесплатный аналог Flopzilla в браузере</a
+            >
+          </li>
+          <li>
+            <a href="https://github.com/matyushinleonid/kongzilla">Source code on GitHub</a>
+          </li>
+        </ul>
+      </div>
+    </noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

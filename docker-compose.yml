@@ -1,0 +1,21 @@
+services:
+  dev:
+    profiles: [dev]
+    build:
+      context: .
+      target: dev
+    ports:
+      - "${PORT:-5173}:5173"
+    volumes:
+      - ./web/src:/app/web/src:ro
+      - ./web/index.html:/app/web/index.html:ro
+      - ./web/public:/app/web/public:ro
+      - ./web/vite.config.ts:/app/web/vite.config.ts:ro
+
+  prod:
+    profiles: [prod]
+    build:
+      context: .
+      target: production
+    ports:
+      - "${PORT:-8080}:8080"
