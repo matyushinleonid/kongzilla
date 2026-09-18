@@ -1,0 +1,7 @@
+apiVersion: v2
+name: kongzilla
+description: Hold'em range and board analysis in the browser
+type: application
+icon: https://raw.githubusercontent.com/matyushinleonid/kongzilla/main/web/public/logo.png
+version: 0.1.0
+appVersion: "0.1.0"

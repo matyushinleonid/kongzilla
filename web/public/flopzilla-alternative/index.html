@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Free Flopzilla Alternative — Kongzilla, in Your Browser</title>
+    <meta
+      name="description"
+      content="Kongzilla is a free, open-source Flopzilla alternative that runs in the browser. Range matrix, flop statistics, filters, equity — on Windows, macOS, Linux, no install."
+    />
+    <link rel="canonical" href="https://kongzilla.leonid.sh/flopzilla-alternative/" />
+    <link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/flopzilla-alternative/" />
+    <link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/analog-flopzilla/" />
+    <link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/flopzilla-alternative/" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="stylesheet" href="/pages.css" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Free Flopzilla Alternative — Kongzilla" />
+    <meta
+      property="og:description"
+      content="An open-source Flopzilla clone that runs in the browser. No install, no account, no licence key."
+    />
+    <meta property="og:url" content="https://kongzilla.leonid.sh/flopzilla-alternative/" />
+    <meta property="og:image" content="https://kongzilla.leonid.sh/logo.png" />
+    <meta name="twitter:card" content="summary" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Is there a free alternative to Flopzilla?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Kongzilla is a free and open-source range and board analyser that covers the same loop as Flopzilla: enter a range, enter a flop, read what the range hits, then filter it down to the hands that continue. It runs in the browser, so there is nothing to install and no licence key."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does Flopzilla work on Mac or Linux?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Flopzilla is a Windows program and needs Wine or a virtual machine elsewhere. Kongzilla runs in any modern browser, so macOS and Linux are first-class."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Is a browser range analyser fast enough?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "The engine is written in Rust and compiled to WebAssembly. Board statistics recompute on every keystroke, and equity is enumerated exactly rather than sampled."
+            }
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="site">
+        <img src="/logo.png" width="32" height="32" alt="" />
+        <a href="/">Kongzilla</a>
+        <nav>
+          <a href="/">App</a>
+          <a href="/guide/">Guide</a>
+          <a href="https://github.com/matyushinleonid/kongzilla">Source</a>
+          <a href="/ru/analog-flopzilla/" hreflang="ru" lang="ru">RU</a>
+        </nav>
+      </header>
+
+      <h1>A free Flopzilla alternative that runs in your browser</h1>
+
+      <p class="lede">
+        Kongzilla is an open-source clone of the analysis loop
+        <a href="https://www.flopzilla.com/">Flopzilla</a> made standard: enter a range, enter a
+        flop, read what the range actually hits, then filter it down to the hands that would keep
+        going. No install, no account, no licence key, and nothing leaves your machine.
+      </p>
+
+      <a class="cta" href="/">Open Kongzilla</a>
+
+      <h2>What it does</h2>
+      <ul>
+        <li>
+          <strong>Range matrix.</strong> 169 cells, paint with weights, text notation both ways
+          (<code>AKs+, 77-99, QJo</code>), a percentage slider over a real hand ranking, and combo
+          level suit selection.
+        </li>
+        <li>
+          <strong>Board statistics.</strong> The full ladder — straight flush down to no made hand,
+          plus flushdraws, open-enders, gutshots, backdoors and the combination rows — recomputed as
+          you type.
+        </li>
+        <li>
+          <strong>Filters.</strong> Mark which classes continue and the whole panel re-reads through
+          them, or cut the range to its strongest share by equity, which keeps the draws a class
+          ladder would fold.
+        </li>
+        <li>
+          <strong>Equity.</strong> Exact enumeration, range versus range or hand versus range, with
+          a per-combo equity matrix and a distribution graph.
+        </li>
+        <li>
+          <strong>Flop statistics.</strong> How a range performs averaged over all 22,100 flops, and
+          how often each kind of flop comes up.
+        </li>
+        <li>
+          <strong>Preflop charts.</strong> Solver ranges for 20–100bb tournament play, by seat and
+          by spot.
+        </li>
+      </ul>
+
+      <h2>How it compares</h2>
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>Kongzilla</th>
+            <th>Flopzilla</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Price</td>
+            <td>Free, MIT licensed</td>
+            <td>Paid licence</td>
+          </tr>
+          <tr>
+            <td>Install</td>
+            <td>None — it is a web page</td>
+            <td>Windows installer</td>
+          </tr>
+          <tr>
+            <td>macOS and Linux</td>
+            <td>Yes, natively</td>
+            <td>Wine or a virtual machine</td>
+          </tr>
+          <tr>
+            <td>Source code</td>
+            <td>Open, on GitHub</td>
+            <td>Closed</td>
+          </tr>
+          <tr>
+            <td>Offline</td>
+            <td>Yes — one HTML file you can keep</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td>Your data</td>
+            <td>Never leaves the browser</td>
+            <td>Stays on your machine</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Frequently asked</h2>
+
+      <h3>Is it really free?</h3>
+      <p>
+        Yes. It is MIT licensed and the whole engine is on
+        <a href="https://github.com/matyushinleonid/kongzilla">GitHub</a>. There is no paid tier and
+        no account.
+      </p>
+
+      <h3>Does it work on a Mac?</h3>
+      <p>
+        Yes. Flopzilla is a Windows program; Kongzilla is a web page, so macOS, Linux, ChromeOS and
+        tablets all work the same.
+      </p>
+
+      <h3>Can I use it offline?</h3>
+      <p>
+        Yes. Every release ships a single HTML file with the engine inside it — download it once,
+        double-click it, and it runs with no network at all.
+      </p>
+
+      <h3>Is my range data sent anywhere?</h3>
+      <p>
+        No. The analysis engine is compiled to WebAssembly and runs inside your browser tab. There
+        is no server to send anything to.
+      </p>
+
+      <footer class="site">
+        <a href="/ru/analog-flopzilla/" hreflang="ru" lang="ru">Бесплатный аналог — по-русски</a> ·
+
+        Kongzilla is not affiliated with Flopzilla or its authors. Flopzilla is their trademark and
+        is referenced here only to describe what this tool does.
+        <a href="https://github.com/matyushinleonid/kongzilla">Source on GitHub</a>.
+      </footer>
+    </div>
+    <script src="/pages.js" defer></script>
+  </body>
+</html>

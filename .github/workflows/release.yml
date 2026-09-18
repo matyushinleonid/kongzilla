@@ -1,0 +1,157 @@
+name: Release
+
+run-name: Release v${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version without the v prefix, for example 0.2.0
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  WASM_BINDGEN_VERSION: 0.2.128
+
+jobs:
+  release:
+    name: Stamp the version, promote the image, publish the release
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: cr.yandex/${{ vars.YC_REGISTRY_ID }}/${{ vars.YC_REGISTRY_REPOSITORY }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Require main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Releases must be dispatched from main, got ${GITHUB_REF}." >&2
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate the requested version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Version must be a stable semantic version such as 0.2.0." >&2
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/v$VERSION"; then
+            echo "Tag v$VERSION already exists." >&2
+            exit 1
+          fi
+
+      - name: Require a successful CI run for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          conclusion="$(gh run list --workflow ci.yml --branch main --commit "$GITHUB_SHA" --event push --limit 1 --json conclusion --jq '.[0].conclusion // ""')"
+          if [[ "$conclusion" != "success" ]]; then
+            echo "Commit $GITHUB_SHA has no successful main CI run." >&2
+            exit 1
+          fi
+
+      # One version, stamped everywhere from the one input, so the crates, the
+      # package, the chart and the deployed tag cannot drift apart.
+      - name: Stamp the version
+        shell: bash
+        run: python3 scripts/set_version.py "$VERSION"
+
+      - name: Install the pinned toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+          cache-key: wasm
+
+      - name: Install wasm-bindgen
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ env.WASM_BINDGEN_VERSION }}
+
+      - name: Build the engine for the browser
+        run: |
+          cargo build --release --target wasm32-unknown-unknown -p kongzilla-wasm
+          wasm-bindgen --target web --out-dir web/wasm \
+            target/wasm32-unknown-unknown/release/kongzilla_wasm.wasm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      # One HTML file with the engine, the styles and the icons inside it. No
+      # install, no server, no network: double-click it and it opens.
+      - name: Build the standalone page
+        working-directory: web
+        run: npm run build:standalone
+
+      - name: Name the standalone page
+        shell: bash
+        run: |
+          set -euo pipefail
+          mv web/dist-standalone/index.html "kongzilla-$VERSION.html"
+          ls -l "kongzilla-$VERSION.html"
+
+      - name: Log in to Yandex Container Registry
+        uses: yc-actions/yc-cr-login@v3
+        with:
+          yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_CREDENTIALS }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Promote the tested images
+        shell: bash
+        run: |
+          set -euo pipefail
+          minor="${VERSION%.*}"
+          for image in "$IMAGE" "$IMAGE-beacon"; do
+            docker buildx imagetools create \
+              --prefer-index=false \
+              --tag "$image:$VERSION" \
+              --tag "$image:$minor" \
+              "$image:sha-$GITHUB_SHA"
+          done
+
+      - name: Commit the stamped version
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.toml Cargo.lock web/package.json web/package-lock.json \
+            deploy/helm/kongzilla/Chart.yaml deploy/helm/kongzilla/values.yaml
+          git commit -m "chore(release): v$VERSION [skip ci]"
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "v$VERSION" \
+            --target "${{ steps.commit.outputs.sha }}" \
+            --title "v$VERSION" \
+            --generate-notes \
+            "kongzilla-$VERSION.html#Kongzilla $VERSION - single file, open it in a browser"

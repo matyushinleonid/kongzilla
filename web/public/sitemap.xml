@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Every written page names its own language and its counterpart. Declaring the
+  pair here as well as in the pages themselves is what keeps the two versions
+  from competing with each other for the same result.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://kongzilla.leonid.sh/</loc>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+
+  <url>
+    <loc>https://kongzilla.leonid.sh/flopzilla-alternative/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/flopzilla-alternative/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/analog-flopzilla/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/flopzilla-alternative/"/>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://kongzilla.leonid.sh/ru/analog-flopzilla/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/flopzilla-alternative/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/analog-flopzilla/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/flopzilla-alternative/"/>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+
+  <url>
+    <loc>https://kongzilla.leonid.sh/what-is-flopzilla/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/what-is-flopzilla/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/razbor-diapazonov/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/what-is-flopzilla/"/>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://kongzilla.leonid.sh/ru/razbor-diapazonov/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/what-is-flopzilla/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/razbor-diapazonov/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/what-is-flopzilla/"/>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+
+  <url>
+    <loc>https://kongzilla.leonid.sh/guide/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/guide/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/rukovodstvo/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/guide/"/>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://kongzilla.leonid.sh/ru/rukovodstvo/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://kongzilla.leonid.sh/guide/"/>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://kongzilla.leonid.sh/ru/rukovodstvo/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://kongzilla.leonid.sh/guide/"/>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+</urlset>

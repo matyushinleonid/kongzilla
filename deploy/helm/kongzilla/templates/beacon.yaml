@@ -1,0 +1,105 @@
+{{- if .Values.beacon.enabled }}
+{{- $fullname := printf "%s-beacon" (include "kongzilla.fullname" .) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kongzilla.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beacon
+spec:
+  # One replica by default. Distinct visitors are a set, and a set kept in more
+  # than one process counts the same person once per process - so either this
+  # stays at one, or Redis holds the set (see `beacon.redis`).
+  replicas: {{ .Values.beacon.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kongzilla.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: beacon
+  template:
+    metadata:
+      labels:
+        {{- include "kongzilla.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: beacon
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: beacon
+          image: "{{ .Values.beacon.image.repository }}:{{ .Values.beacon.image.tag | default .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+            # Scraped from inside the cluster only; the route never exposes it.
+            - name: metrics
+              containerPort: 9090
+          env:
+            - name: BEACON_HOST
+              value: {{ .Values.gateway.host | quote }}
+            {{- with .Values.beacon.redis.secretName }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ $.Values.beacon.redis.secretKey | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.beacon.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kongzilla.labels" . | nindent 4 }}
+    app.kubernetes.io/component: beacon
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kongzilla.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: beacon
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+{{- if .Values.beacon.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "kongzilla.labels" . | nindent 4 }}
+    {{- with .Values.beacon.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "kongzilla.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: beacon
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.beacon.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.beacon.serviceMonitor.scrapeTimeout }}
+{{- end }}
+{{- end }}

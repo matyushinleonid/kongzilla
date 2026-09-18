@@ -1,0 +1,8 @@
+{
+  "//": "Tests and build config run under Node, so they get Node's types; src does not.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["test", "wasm", "vite.config.ts"]
+}
