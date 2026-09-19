@@ -1,22 +1,8 @@
-/** The title bar: the name, the option toggles and the sharing actions. */
-
-/** The save dialog, where the browser has one. */
-interface WindowWithFilePicker extends Window {
-  showSaveFilePicker?: (options: {
-    suggestedName?: string;
-    types?: Array<{ description: string; accept: Record<string, string[]> }>;
-  }) => Promise<{
-    createWritable: () => Promise<{
-      write: (data: string | Blob) => Promise<void>;
-      close: () => Promise<void>;
-    }>;
-  }>;
-}
-
 import { track } from "../analytics";
-import { mutate, restore, snapshot, state } from "../store";
+import { chrome, mutate, restore, runPreflop, snapshot, state } from "../store";
 import { shareLink } from "../share";
 import { imageName, rangeImage } from "./rangeImage";
+import { saveAs } from "./saveAs";
 import { cycleTheme, themeLabel } from "./theme";
 
 export function createMenuBar(): {
@@ -63,7 +49,17 @@ export function createMenuBar(): {
   bdfd.append(bdfdInput, document.createTextNode("1-card backdoor FD"));
   bdfd.title = "Report one-card backdoor flushdraws on two-flush flops";
   bdfdInput.addEventListener("change", () => {
+    // A pass over the flops was classified with this setting as it stood, so
+    // changing it retires the pass - every row of it would otherwise be a
+    // number worked out under the other rule.
+    //
+    // Retiring it and stopping there emptied the whole panel and put the
+    // button back, which reads as the checkbox having broken something. The
+    // reader had already asked for this pass; changing how its hands are
+    // classified is the same question again, so it is asked again for them.
+    const had = chrome.preflop !== null;
     mutate((engine) => engine.setOneCardBackdoorFlushdraw(bdfdInput.checked));
+    if (had && chrome.preflop === null && !chrome.preflopRunning) runPreflop();
   });
 
   const theme = document.createElement("button");
@@ -83,55 +79,23 @@ export function createMenuBar(): {
     track("copy_range");
   });
   const save = action("Save", async () => {
-    const json = snapshot();
-    const suggestedName = `kongzilla-${new Date().toISOString().slice(0, 10)}.json`;
-    // Where browsers offer a real save dialog, use it: naming the file is part of
-    // saving. Everywhere else, fall back to a download.
-    const picker = (window as WindowWithFilePicker).showSaveFilePicker;
-    if (picker) {
-      const handle = await picker.call(window, {
-        suggestedName,
-        types: [{ description: "Kongzilla session", accept: { "application/json": [".json"] } }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(json);
-      await writable.close();
-      track("session_saved");
-      return;
-    }
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = suggestedName;
-    link.click();
-    URL.revokeObjectURL(url);
-    track("session_saved");
+    const name = `kongzilla-${new Date().toISOString().slice(0, 10)}.json`;
+    const saved = await saveAs(snapshot(), name, {
+      description: "Kongzilla session",
+      mime: "application/json",
+      extension: ".json",
+    });
+    if (saved) track("session_saved");
   });
   // A link carries the session for anyone who has the app; a picture is for
   // everyone else - a forum post, a chat, a hand history.
   const image = action("Image", async () => {
-    const blob = await rangeImage();
-    const suggestedName = imageName();
-    const filePicker = (window as WindowWithFilePicker).showSaveFilePicker;
-    if (filePicker) {
-      const handle = await filePicker.call(window, {
-        suggestedName,
-        types: [{ description: "PNG image", accept: { "image/png": [".png"] } }],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      track("image_saved");
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = suggestedName;
-    link.click();
-    URL.revokeObjectURL(url);
-    track("image_saved");
+    const saved = await saveAs(await rangeImage(), imageName(), {
+      description: "PNG image",
+      mime: "image/png",
+      extension: ".png",
+    });
+    if (saved) track("image_saved");
   });
   const load = action("Load", () => picker.click());
 
@@ -145,12 +109,10 @@ export function createMenuBar(): {
     picker.value = "";
   });
 
-  // The written pages are static HTML and carry the search terms the app
-  // cannot; linking them from here is what makes them findable at all.
   const keys = document.createElement("button");
   keys.type = "button";
   keys.className = "btn";
-  keys.textContent = "?";
+  keys.textContent = "Hotkeys";
   keys.title = "Keyboard shortcuts (?)";
   keys.setAttribute("aria-label", keys.title);
   keys.addEventListener("click", () => {
@@ -158,11 +120,19 @@ export function createMenuBar(): {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
   });
 
+  // The written pages are static HTML and carry the search terms the app
+  // cannot; linking them from here is what makes them findable at all.
+  //
+  // The label is deliberately dull. They are written for search engines rather
+  // than for somebody mid-hand, and a label that promised help would send
+  // readers out of the app to find none. It still has to read as an ordinary
+  // link to a crawler, so it says what is there - pages of prose - rather than
+  // what they are for.
   const guide = document.createElement("a");
   guide.className = "btn source-link";
   guide.href = "/guide/";
-  guide.textContent = "Guide";
-  guide.title = "How to use Kongzilla";
+  guide.textContent = "Notes";
+  guide.title = "Written pages about ranges and board texture";
 
   const source = document.createElement("a");
   source.className = "btn source-link";

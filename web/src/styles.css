@@ -1319,6 +1319,60 @@ body {
   font-size: 11px;
 }
 
+/*
+ * The stand-in save dialog, for browsers with no save dialog of their own.
+ * Narrow, because one field is all it holds, and the field is the thing it
+ * opens for - so it gets the width and the focus ring.
+ */
+.save-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 340px;
+  max-width: 100%;
+}
+
+.save-sheet .sheet-head {
+  margin-bottom: 0;
+}
+
+.save-name {
+  font: inherit;
+  padding: 4px 6px;
+  background: var(--panel-sunken);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--ink);
+}
+
+.save-name:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.save-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/*
+ * A chip whose chart is no longer what the chart says.
+ *
+ * Dashed rather than dark: the reader picked this spot and is still in it, so
+ * putting the chip out would lose the one label that says which spot it is.
+ * What has changed is that the range is theirs now rather than the solver's,
+ * and a broken outline is the usual way of saying "this, modified".
+ */
+.chip.edited {
+  border-style: dashed;
+  border-width: 1px;
+}
+
+.library-trim[hidden] {
+  display: none;
+}
+
 /* ----- statistics panel --------------------------------------------------- */
 
 /*
@@ -1373,6 +1427,41 @@ body {
   box-shadow:
     inset 0 7px 5px -5px rgb(0 0 0 / 22%),
     inset 0 -7px 5px -5px rgb(0 0 0 / 22%);
+}
+
+/*
+ * The rows the hand under the pointer is about.
+ *
+ * The reverse of hovering a row, which lights the matrix: point at a hand and
+ * the panel says what it makes. A bar down the inside edge rather than a wash
+ * over the row, because the row already uses its background for the hover and
+ * its bar for the number, and a third thing competing with those would make
+ * all three harder to read.
+ *
+ * `--makes` is the share of the cell that makes it - a cell is up to sixteen
+ * hands - so a statistic only half of them make is drawn at half strength
+ * rather than as a flat yes.
+ */
+.stat-row.makes {
+  box-shadow: inset 3px 0 0 var(--accent);
+  /* Safe to use the background as well: the row's own hover is what happens
+     when the pointer is on the row, and the pointer cannot be on a row and on
+     a hand at the same time. */
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.stat-row.makes .stat-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.stat-row.makes-some {
+  box-shadow: inset 3px 0 0 rgb(from var(--accent) r g b / calc(0.25 + var(--makes, 1) * 0.75));
+  background: color-mix(
+    in srgb,
+    var(--accent) calc((0.25 + var(--makes, 1) * 0.75) * 10%),
+    transparent
+  );
 }
 
 .stat-block + .stat-block {
@@ -1791,12 +1880,21 @@ body {
   pointer-events: auto;
 }
 
+/*
+ * The track carries the staircase.
+ *
+ * Equity across a range holds a value over a run of hands and then drops, so
+ * the places worth stopping are the edges of those runs - `--ticks` is a
+ * hairline at each, drawn over the track's own colour. The slider snaps to
+ * them, and the marks are there so the snapping reads as the shape of the
+ * range rather than as a sticky control.
+ */
 .share-slider::-webkit-slider-runnable-track {
-  background: var(--track);
+  background: var(--ticks, none), var(--track);
 }
 
 .share-slider::-moz-range-track {
-  background: var(--track);
+  background: var(--ticks, none), var(--track);
 }
 
 .cut-clear {
@@ -2215,7 +2313,7 @@ body.resizing {
   position: absolute;
   inset: auto 0 0 0;
   height: 3px;
-  background: var(--mark);
+  background: var(--groups, var(--mark));
 }
 
 /* A combination one of whose cards is on the table cannot be held at all. */
@@ -2326,6 +2424,21 @@ body.resizing {
   display: grid;
   grid-template-columns: repeat(13, minmax(0, 1fr));
   gap: 1px;
+}
+
+/*
+ * The hand the pointer is on, wherever it is on it.
+ *
+ * Every panel that speaks about hands marks the one being pointed at the same
+ * way, so following it between them needs no learning: point at a row of the
+ * equity table and the matrix says which cell that is.
+ */
+.cell.peek,
+.suit-cell.peek,
+.eq-cell.peek,
+.eq-row.peek {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .eq-cell {
@@ -2624,13 +2737,6 @@ body.resizing {
   white-space: nowrap;
 }
 
-.sheet-note {
-  grid-column: 2;
-  color: var(--ink-faint);
-  font-style: normal;
-  font-size: 11px;
-}
-
 .sheet-foot {
   margin: 10px 0 0;
   color: var(--ink-faint);
@@ -2740,6 +2846,23 @@ body.resizing {
 }
 
 /* Under the curve, every hand it is made of. */
+/*
+ * The hand column, washed with the colour the hand was painted.
+ *
+ * The table is the same range the matrix is showing, so a hand the reader
+ * decided to continue with should look decided here too. A wash rather than the
+ * colour itself: the text has to stay readable on it in both themes.
+ */
+.eq-hand[data-colours="1"] {
+  background: color-mix(in srgb, var(--mark) 26%, transparent);
+}
+
+/* One band per colour, set as a gradient where there is more than one. */
+.eq-hand:not([data-colours="0"]) {
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
 .eq-table {
   max-height: 240px;
   overflow: auto;

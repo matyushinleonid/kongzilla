@@ -35,8 +35,6 @@ export interface Binding {
   group: string;
   /** What it does, in the imperative. */
   does: string;
-  /** Set when Flopzilla binds the same thing to a different key. */
-  flopzilla?: string;
   /** `event.key`, lower-cased for letters. */
   match: (event: KeyboardEvent) => boolean;
   run: (context: Context) => void;
@@ -145,7 +143,6 @@ export const BINDINGS: Binding[] = [
     keys: "←  →",
     group: "Board",
     does: "Hide or restore a street",
-    flopzilla: "same",
     match: (event) => event.key === "ArrowLeft" || event.key === "ArrowRight",
     // Handled before the table is consulted, because the direction decides it.
     run: () => {},
@@ -177,7 +174,6 @@ export const BINDINGS: Binding[] = [
     keys: "↑  ↓",
     group: "Range",
     does: "Paint weight up or down by 5%",
-    flopzilla: "same",
     match: (event) => event.key === "ArrowUp" || event.key === "ArrowDown",
     run: () => {
       const step = 0.05;
@@ -201,7 +197,6 @@ export const BINDINGS: Binding[] = [
     keys: "Tab",
     group: "Statistics",
     does: "Percentages or combinations",
-    flopzilla: "same",
     match: (event) => event.key === "Tab" && !event.ctrlKey && !event.altKey,
     run: () => {
       chrome.showCombos = !chrome.showCombos;
@@ -212,7 +207,6 @@ export const BINDINGS: Binding[] = [
     keys: "Space",
     group: "Statistics",
     does: "Next colour on the palette",
-    flopzilla: "toggles filter and delete mode",
     match: (event) => plain(event, " "),
     run: () => {
       const colours = palette();
@@ -236,7 +230,6 @@ export const BINDINGS: Binding[] = [
     keys: "Alt+S",
     group: "Statistics",
     does: "Clear every colour and filter",
-    flopzilla: "same",
     match: (event) => event.altKey && meaning(event) === "s",
     run: () => mutate((engine) => engine.clearFilters()),
   },
@@ -244,7 +237,6 @@ export const BINDINGS: Binding[] = [
     keys: "T",
     group: "Statistics",
     does: "Copy the numbers on screen",
-    flopzilla: "Ctrl+T, which a browser keeps",
     match: (event) => plain(event, "t"),
     run: (context) => {
       const stat = hovered();
@@ -256,7 +248,6 @@ export const BINDINGS: Binding[] = [
     keys: "⇧T",
     group: "Statistics",
     does: "Copy every combination they cover",
-    flopzilla: "Ctrl+Alt+T",
     match: (event) => shifted(event, "t"),
     run: (context) => {
       const stat = hovered();
@@ -322,7 +313,6 @@ export const BINDINGS: Binding[] = [
     keys: "Ctrl+O",
     group: "Session",
     does: "Load a file",
-    flopzilla: "Ctrl+I, which a browser keeps",
     match: (event) => control(event, "o"),
     run: (context) => context.actions.load(),
   },
@@ -428,13 +418,6 @@ export function createHotkeySheet(): {
       const does = document.createElement("span");
       does.textContent = binding.does;
       row.append(keys, does);
-      // Say where Flopzilla put it, for anyone arriving with the muscle memory.
-      if (binding.flopzilla && binding.flopzilla !== "same") {
-        const note = document.createElement("i");
-        note.className = "sheet-note";
-        note.textContent = `Flopzilla: ${binding.flopzilla}`;
-        row.append(note);
-      }
       section.append(row);
     }
     body.append(section);
@@ -442,8 +425,9 @@ export function createHotkeySheet(): {
 
   const foot = document.createElement("p");
   foot.className = "sheet-foot";
-  foot.textContent =
-    "Keys marked with a Flopzilla note moved because a browser will not give the original up.";
+  // Why some of these are not the obvious key: a browser keeps the obvious one
+  // for itself, and a shortcut that opened a new tab would be worse than none.
+  foot.textContent = "A few keys are the second choice, because a browser keeps the first.";
 
   sheet.append(head, body, foot);
   backdrop.append(sheet);

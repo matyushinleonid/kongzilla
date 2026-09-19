@@ -80,6 +80,8 @@ async function open(): Promise<App> {
     editing: null,
     suitCell: null,
     suitPeek: null,
+    peekClass: null,
+    peekCombo: null,
     output: "groups",
     showCombos: false,
     brush: 1,
@@ -960,6 +962,71 @@ describe("drawing on the matrix", () => {
     expect(drawn(app, "AA").on).toBe(true);
   });
 
+  test("the slider parks on the chart, and one stop moves one cell", async () => {
+    const app = await open();
+    stack(app, "mtt", "100bb").click();
+    app.render();
+    chip(app, "mtt", "defend", "UTG").click();
+    app.render();
+    const chart = state().players[state().active].notation;
+    const combos = () => state().players[state().active].combos;
+    const held = combos();
+    const cut = app.range.querySelector<HTMLInputElement>(".slider-cut")!;
+    const top = app.range.querySelector<HTMLInputElement>(".slider-top")!;
+
+    // Parked on the chart's own width, which leaves the blue handle room to go
+    // further right - the complaint that a handle already at its stop could not
+    // take in a hand the chart folds.
+    expect(Number(cut.value)).toBe(0);
+    expect(Number(top.value)).toBeGreaterThan(50);
+    expect(Number(top.value)).toBeLessThan(100);
+
+    const nudge = (which: HTMLInputElement, to: number) => {
+      which.value = String(to);
+      which.dispatchEvent(new window.Event("input", { bubbles: true }));
+      app.render();
+    };
+
+    // One press of an arrow key. The browser moves the handle by some amount of
+    // its own; what matters is that it lands on the next cell edge and takes
+    // one cell with it, rather than swapping the chart for a percentile band.
+    const parked = Number(top.value);
+    nudge(top, parked + 1);
+    expect(combos()).toBeGreaterThan(held);
+    expect(combos() - held).toBeLessThan(25);
+    // What it added is a hand the chart folded, and everything the chart had is
+    // still there at the weight it had.
+    expect(state().players[state().active].notation).not.toBe(chart);
+
+    // Back again, and the chart is back whole - mixed cells and all.
+    nudge(top, parked);
+    expect(state().players[state().active].notation).toBe(chart);
+
+    // The red handle takes the top off instead, a cell at a time.
+    nudge(cut, 1);
+    expect(drawn(app, "AA").on).toBe(false);
+    expect(held - combos()).toBeLessThan(25);
+    // Still the chart the reader chose, marked as edited.
+    const lit = app.range.querySelector<HTMLElement>(".seat-chip.active")!;
+    expect(lit.textContent).toBe("UTG");
+    expect(lit.classList.contains("edited")).toBe(true);
+
+    // The far ends still mean what they mean.
+    nudge(cut, 0);
+    nudge(top, 100);
+    expect(drawn(app, "72o").on).toBe(true);
+    nudge(top, 0);
+    expect(combos()).toBe(0);
+
+    // And loading a chart again parks on it afresh.
+    chip(app, "mtt", "open", "BTN").click();
+    app.render();
+    expect(Number(cut.value)).toBe(0);
+    expect(app.range.querySelector<HTMLElement>(".seat-chip.active")!.classList).not.toContain(
+      "edited",
+    );
+  });
+
   test("dragging left off a pair of stacked handles pulls the red one out", async () => {
     const app = await open();
     const track = app.range.querySelector<HTMLElement>(".slider-track")!;
@@ -970,6 +1037,8 @@ describe("drawing on the matrix", () => {
     track.getBoundingClientRect = () => ({ left: 0, width: 211, top: 0, height: 18 }) as DOMRect;
 
     // Park both handles on the same value: an empty band, nothing selected.
+    // Each lands on the nearest cell edge, so they are read back rather than
+    // assumed - what matters here is which handle a drag picks up.
     const percent = app.range.querySelector<HTMLInputElement>(".percent")!;
     percent.value = "0";
     percent.dispatchEvent(new window.Event("change", { bubbles: true }));
@@ -978,7 +1047,10 @@ describe("drawing on the matrix", () => {
     cut.value = "30";
     cut.dispatchEvent(new window.Event("input", { bubbles: true }));
     app.render();
-    expect([cut.value, top.value]).toEqual(["30", "30"]);
+    const stacked = Number(top.value);
+    expect(Number(cut.value)).toBe(stacked);
+    expect(stacked).toBeGreaterThan(29);
+    expect(stacked).toBeLessThan(31);
     expect(state().players[state().active].combos).toBe(0);
 
     // Press on the stack and pull left. The blue handle cannot go left - the
@@ -987,8 +1059,10 @@ describe("drawing on the matrix", () => {
     track.dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true, clientX: at(30) }));
     track.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: at(12) }));
     app.render();
-    expect(cut.value).toBe("12");
-    expect(top.value).toBe("30");
+    const pulled = Number(cut.value);
+    expect(pulled).toBeGreaterThan(11);
+    expect(pulled).toBeLessThan(13);
+    expect(Number(top.value)).toBe(stacked);
 
     // Which is a real band now, off the top of the ranking.
     const band = state().players[state().active].percent;
@@ -1000,16 +1074,17 @@ describe("drawing on the matrix", () => {
     // handle must not hand the drag over mid-pull.
     track.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: at(44) }));
     app.render();
-    expect(top.value).toBe("30");
-    expect(cut.value).toBe("30");
+    expect(Number(top.value)).toBe(stacked);
+    expect(Number(cut.value)).toBe(stacked);
     track.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true, clientX: at(44) }));
 
     // And pulling right off a stack takes the blue one instead.
     track.dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true, clientX: at(30) }));
     track.dispatchEvent(new window.MouseEvent("pointermove", { bubbles: true, clientX: at(65) }));
     app.render();
-    expect(top.value).toBe("65");
-    expect(cut.value).toBe("30");
+    expect(Number(top.value)).toBeGreaterThan(64);
+    expect(Number(top.value)).toBeLessThan(66);
+    expect(Number(cut.value)).toBe(stacked);
     track.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true, clientX: at(65) }));
   });
 
@@ -1224,8 +1299,8 @@ describe("the output views", () => {
     // rather than drawing an empty chart.
     for (const [key, wanted] of [
       ["overlap", /Pick a flop/],
-      ["eq-matrix", /Needs a board/],
-      ["eq-graph", /Needs a board/],
+      ["eq-matrix", /comes from the pass over flops/],
+      ["eq-graph", /comes from the pass over flops/],
       ["hotness", /Needs a dealt hand/],
     ] as const) {
       tab(app, key).click();
@@ -1265,6 +1340,350 @@ describe("the output views", () => {
   });
 });
 
+describe("equity before the flop", () => {
+  test("the pass over the flops fills in the equity views too", async () => {
+    const app = await open();
+    type(app, "22+, AQs+, AKo");
+    const seats = Array.from(app.strip.querySelectorAll<HTMLButtonElement>(".seat"));
+    seats[1].click();
+    app.render();
+    type(app, "22+, A2s+, K9s+, A8o+, KJo+");
+    seats[0].click();
+    app.render();
+
+    // With no board it is not worked out on the way past: a second of sampling
+    // on every redraw would make the whole app feel broken. It points at the
+    // pass that does work it out rather than offering a button of its own.
+    tab(app, "eq-matrix").click();
+    app.render();
+    expect(app.output.querySelectorAll(".eq-cell")).toHaveLength(0);
+    expect(app.output.textContent).toMatch(/comes from the pass over flops/);
+    expect(
+      Array.from(app.output.querySelectorAll("button")).map((button) => button.textContent),
+      "no second button",
+    ).not.toContain("Calculate equity with no board");
+
+    // Who it is measured against is chosen here, before a flop as after one.
+    const versus = app.output.querySelector<HTMLButtonElement>(".versus-output")!;
+    expect(versus.hidden).toBe(false);
+
+    // One pass in the statistics panel, and both answers arrive.
+    headButton(app.stats, "Clear");
+    const run = Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".btn")).find((button) =>
+      button.textContent?.startsWith("Calculate over"),
+    )!;
+    run.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+
+    const cells = Array.from(app.output.querySelectorAll<HTMLElement>(".eq-cell"));
+    expect(cells).toHaveLength(169);
+    const equityOf = (hand: string) => {
+      const cell = cells.find((element) => element.querySelector(".eq-name")?.textContent === hand);
+      return Number(cell?.querySelector(".eq-value")?.textContent?.replace("%", ""));
+    };
+    expect(equityOf("AA")).toBeGreaterThan(80);
+    expect(equityOf("AA")).toBeLessThan(90);
+    expect(equityOf("22")).toBeLessThan(equityOf("AA"));
+
+    // The graph has both curves, from the one pass.
+    tab(app, "eq-graph").click();
+    app.render();
+    expect(app.output.querySelectorAll(".eq-graph .curve").length).toBeGreaterThan(1);
+
+    // And the answer is about what it was run on: move a range and it goes,
+    // rather than a stale curve staying up.
+    tab(app, "eq-matrix").click();
+    app.render();
+    type(app, "22+, AQs+, AKo, 76s");
+    app.render();
+    expect(app.output.querySelectorAll(".eq-cell")).toHaveLength(0);
+    expect(app.output.textContent).toMatch(/comes from the pass over flops/);
+  });
+});
+
+describe("editing a chart rather than replacing it", () => {
+  const cutHandle = (app: App) => app.range.querySelector<HTMLInputElement>(".slider-cut")!;
+  const topHandle = (app: App) => app.range.querySelector<HTMLInputElement>(".slider-top")!;
+  const nudge = (app: App, which: HTMLInputElement, to: number) => {
+    which.value = String(to);
+    which.dispatchEvent(new window.Event("input", { bubbles: true }));
+    app.render();
+  };
+  const combos = () => state().players[state().active].combos;
+
+  test("a nudge of the slider moves one cell, not a hundred hands", async () => {
+    const app = await open();
+    stack(app, "mtt", "100bb").click();
+    app.render();
+    chip(app, "mtt", "defend", "UTG").click();
+    app.render();
+    const chart = state().players[state().active].notation;
+    const held = combos();
+    const parked = Number(topHandle(app).value);
+
+    // Parked on the chart's own width. Both handles have somewhere to go, and
+    // going there moves about a matrix cell - the slider cuts an ordering the
+    // chart defines, not a percentile band of the ranking.
+    expect(Number(cutHandle(app).value)).toBe(0);
+    expect(parked).toBeGreaterThan(50);
+    expect(parked).toBeLessThan(100);
+
+    nudge(app, topHandle(app), parked + 1);
+    expect(combos()).toBeGreaterThan(held);
+    expect(combos() - held, "one cell, not a chart").toBeLessThan(25);
+
+    // Back again and the chart is back whole, mixed cells and all.
+    nudge(app, topHandle(app), parked);
+    expect(state().players[state().active].notation).toBe(chart);
+
+    // The red handle takes the top off, which is the three-betting part.
+    nudge(app, cutHandle(app), 1);
+    expect(drawn(app, "AA").on).toBe(false);
+    expect(held - combos()).toBeLessThan(25);
+
+    // And the far ends still mean what they mean.
+    nudge(app, cutHandle(app), 0);
+    nudge(app, topHandle(app), 100);
+    expect(drawn(app, "72o").on, "a hand the chart folds").toBe(true);
+    nudge(app, topHandle(app), 0);
+    expect(combos()).toBe(0);
+  });
+
+  test("editing marks the chart rather than putting its light out", async () => {
+    const app = await open();
+    stack(app, "mtt", "100bb").click();
+    app.render();
+    chip(app, "mtt", "open", "BTN").click();
+    app.render();
+
+    const seat = () => app.range.querySelector<HTMLElement>(".seat-chip.active")!;
+    const depth = () => app.range.querySelector<HTMLElement>(".stack-chip.active")!;
+    const trim = () => app.range.querySelector<HTMLElement>(".library-trim")!;
+    expect(seat().textContent).toBe("BTN");
+    expect(seat().classList.contains("edited")).toBe(false);
+    expect(trim().hidden, "a chart as it ships can be loaded another way").toBe(false);
+
+    // Painting a cell is an edit. The reader is still in this spot, so the
+    // chips stay lit and go dashed - and the switch that says how charts
+    // arrive goes away, there being no chart on the table any more.
+    cell(app, "72o").dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true }));
+    app.render();
+    expect(seat().textContent).toBe("BTN");
+    expect(seat().classList.contains("edited")).toBe(true);
+    expect(depth().classList.contains("edited")).toBe(true);
+    expect(trim().hidden).toBe(true);
+
+    // Loading it again is a fresh chart: the marks come off.
+    chip(app, "mtt", "open", "BTN").click();
+    app.render();
+    expect(seat().classList.contains("edited")).toBe(false);
+    expect(trim().hidden).toBe(false);
+
+    // So does dragging a handle, and so does typing.
+    nudge(app, cutHandle(app), 5);
+    expect(seat().classList.contains("edited")).toBe(true);
+    chip(app, "mtt", "open", "BTN").click();
+    app.render();
+    type(app, "22+");
+    expect(seat().classList.contains("edited")).toBe(true);
+
+    // Clearing is starting again rather than editing, so the light goes out.
+    Array.from(app.range.querySelectorAll<HTMLButtonElement>(".btn.quick"))
+      .find((button) => button.textContent === "Clear")!
+      .click();
+    app.render();
+    expect(app.range.querySelectorAll(".seat-chip.active")).toHaveLength(0);
+    expect(trim().hidden).toBe(true);
+  });
+
+  test("the chart a seat is on belongs to that seat", async () => {
+    const app = await open();
+    stack(app, "mtt", "100bb").click();
+    app.render();
+    chip(app, "mtt", "open", "BTN").click();
+    app.render();
+    const seat = () => app.range.querySelector<HTMLElement>(".seat-chip.active");
+
+    // Switching seats does not make the other seat's range look like an edit
+    // of this one's chart: the chart is a fact about the seat, not about the
+    // notation that happens to be in the box.
+    seats2(app)[1].click();
+    app.render();
+    expect(seat(), "the other seat is on no chart").toBeNull();
+
+    seats2(app)[0].click();
+    app.render();
+    expect(seat()!.textContent).toBe("BTN");
+    expect(seat()!.classList.contains("edited")).toBe(false);
+  });
+});
+
+describe("equity before the flop, from both sides", () => {
+  /** The statistics panel's pass button, while there is one to press. */
+  const runPass = (app: App) =>
+    Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".btn")).find((button) =>
+      button.textContent?.startsWith("Calculate over"),
+    );
+
+  /** Every equity number the matrix is showing, by hand. */
+  const matrix = (app: App): Map<string, number> => {
+    const found = new Map<string, number>();
+    for (const cell of app.output.querySelectorAll<HTMLElement>(".eq-cell")) {
+      const name = cell.querySelector(".eq-name")?.textContent;
+      const value = cell.querySelector(".eq-value")?.textContent;
+      if (name && value) found.set(name, Number(value.replace("%", "")));
+    }
+    return found;
+  };
+
+  test("one pass answers both seats, without a second press", async () => {
+    const app = await open();
+    type(app, "22+, AQs+, AKo");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "22+, A2s+, K9s+, A8o+, KJo+");
+    seats2(app)[0].click();
+    app.render();
+
+    tab(app, "eq-matrix").click();
+    app.render();
+    runPass(app)!.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+    const fromA = matrix(app);
+    expect(fromA.get("AA")).toBeGreaterThan(80);
+
+    // The other seat is the same question backwards, and the pass worked out
+    // both curves - so switching to it shows numbers rather than asking again.
+    seats2(app)[1].click();
+    app.render();
+    const fromB = matrix(app);
+    expect(app.output.querySelectorAll(".eq-cell"), "the grid is drawn").toHaveLength(169);
+    expect(fromB.size, "the other seat is answered too").toBeGreaterThan(30);
+    expect(app.output.textContent).not.toMatch(/comes from the pass over flops/);
+    // Which is B's own range being measured, not A's numbers relabelled: B is
+    // the wider range, so its pairs are the weaker side of the same match-up.
+    expect(fromB.get("22")).toBeLessThan(fromA.get("22")!);
+    expect(fromB.get("AA")).toBeGreaterThan(70);
+  });
+
+  test("a dealt hand is something to measure against, from either side", async () => {
+    const app = await open();
+    type(app, "22+, AQs+, AKo");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "");
+    seats2(app)[0].click();
+    app.render();
+
+    const deal = app.strip.querySelector<HTMLButtonElement>(".deal-hand")!;
+    deal.click();
+    app.render();
+    card(app.strip, "Kh");
+    card(app.strip, "Ks");
+    app.render();
+    expect(state().active, "dealing leaves the reader on their range").toBe(0);
+
+    // Run it from the range's own seat. This used to come back empty: the hand
+    // was blocked by every card dealt at the table, its own two included, so
+    // there was nothing left on the other side to measure against - and the
+    // only way through was to go and press the button on the hand's own page.
+    tab(app, "eq-matrix").click();
+    app.render();
+    runPass(app)!.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+
+    const against = matrix(app);
+    expect(against.size).toBeGreaterThan(0);
+    expect(against.get("AA")).toBeGreaterThan(70);
+    expect(against.get("77")).toBeLessThan(30);
+    // The hand holds two kings, so the range is down to one pair of them.
+    expect(against.get("KK")).toBeGreaterThan(0);
+
+    // And the hand's own seat has its side of it already.
+    const hand = seats2(app).find((seat) => seat.classList.contains("is-hand"))!;
+    hand.click();
+    app.render();
+    expect(app.output.querySelectorAll(".eq-cell").length).toBe(169);
+    expect(matrix(app).get("KK")).toBeGreaterThan(40);
+  });
+
+  test("the ticked flop groups are the flops the equity is over", async () => {
+    const app = await open();
+    type(app, "77, AKo");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "22+, A2s+, K9s+, A8o+");
+    seats2(app)[0].click();
+    app.render();
+
+    tab(app, "eq-matrix").click();
+    app.render();
+    runPass(app)!.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+    const anywhere = matrix(app);
+
+    // Tick a group of flops. That is a different question, so the standing
+    // answer goes and the pass is offered again.
+    const paired = Array.from(app.flops.querySelectorAll<HTMLElement>(".flop-row")).find(
+      (row) => row.querySelector(".flop-label")?.textContent === "Paired, top card",
+    )!;
+    paired.querySelector<HTMLButtonElement>(".flop-pick")!.click();
+    app.render();
+    expect(app.output.textContent).toMatch(/comes from the pass over flops/);
+
+    runPass(app)!.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+    const onPaired = matrix(app);
+
+    // A board paired at the top hands the field trips and leaves ace-king with
+    // one pair to make, so it is worth less there than anywhere.
+    expect(onPaired.get("AKo")).toBeLessThan(anywhere.get("AKo")! - 1);
+  });
+
+  test("every way of holding a hand is the same hand before the flop", async () => {
+    const app = await open();
+    type(app, "AA, KK, AKs");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "22+, A2s+, K9s+, A8o+");
+    seats2(app)[0].click();
+    app.render();
+
+    tab(app, "eq-graph").click();
+    app.render();
+    runPass(app)!.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+
+    // Suits mean nothing but suitedness with no board down, so the six ways of
+    // holding aces are one hand - and the table says so with one number rather
+    // than six readings of the sampler's luck.
+    const rows = Array.from(app.output.querySelectorAll<HTMLElement>(".eq-row[data-combo]"));
+    // "A♠A♥" and the like: the two ranks are the first and third characters.
+    const cell = (row: HTMLElement) => {
+      const hand = row.querySelector(".eq-hand")!.textContent!;
+      return `${hand[0]}${hand[2]}`;
+    };
+    const equity = (row: HTMLElement) => row.children[2].textContent;
+    const aces = rows.filter((row) => cell(row) === "AA");
+    expect(aces, "six ways to hold them").toHaveLength(6);
+    expect(new Set(aces.map(equity)).size, "one number for the six").toBe(1);
+
+    // Same for the twelve of a suited hand's cell, and the kings.
+    const suited = rows.filter((row) => cell(row) === "AK");
+    expect(suited.length).toBeGreaterThan(1);
+    expect(new Set(suited.map(equity)).size).toBe(1);
+
+    // Both curves are drawn, from the one pass.
+    expect(app.output.querySelectorAll(".eq-graph .curve").length).toBeGreaterThan(1);
+  });
+});
+
 describe("two seats and their filters", () => {
   test("a filter belongs to the seat that set it, whichever one is selected", async () => {
     const app = await open();
@@ -1286,44 +1705,14 @@ describe("two seats and their filters", () => {
     const narrowedA = state().effectiveNotation;
 
     // Seat B: something to measure against.
-    console.log(
-      "DBG1 A eff",
-      state().effectiveNotation.slice(0, 40),
-      "eq",
-      JSON.stringify(state().equity),
-    );
     seats[1].click();
     app.render();
-    console.log(
-      "DBG2 active",
-      state().active,
-      "B notation",
-      JSON.stringify(state().players[1].notation),
-    );
     type(app, "AKo");
-    console.log(
-      "DBG3 B notation",
-      state().players[1].notation,
-      "eq",
-      JSON.stringify(state().equity),
-      "board",
-      state().board,
-    );
 
     // Looking from B, A has to be the six sets and not the twenty-two pairs -
     // the filter is A's, and A still has it.
     tab(app, "eq-graph").click();
     app.render();
-    console.log(
-      "DBG equity",
-      JSON.stringify(state().equity),
-      "A",
-      JSON.stringify(state().players[0].notation.slice(0, 40)),
-      "B",
-      state().players[1].notation,
-      "eff",
-      state().effectiveNotation.slice(0, 40),
-    );
     const theirs = app.output.querySelectorAll<HTMLElement>(".eq-graph .curve").length;
     expect(theirs).toBe(2);
     const rows = Array.from(app.output.querySelectorAll<HTMLElement>(".eq-row:not(.eq-head)"));
@@ -1718,10 +2107,17 @@ describe("a table of three, used", () => {
     app.render();
     expect(state().effectiveNotation).not.toMatch(/AsKs/);
 
-    // Hotness is about one hand, and now there is one.
-    seats2(app)[3].click();
-    app.render();
+    // Hotness is about one hand, and now there is one - wherever it is sitting.
+    // Dealing no longer moves the reader onto the hand, so a view that made
+    // them go to it would be telling somebody who had just dealt one to deal
+    // one.
     tab(app, "hotness").click();
+    app.render();
+    expect(state().active, "still on the range").toBe(0);
+    expect(app.output.querySelectorAll(".hot-row").length).toBeGreaterThan(40);
+
+    // And going to the hand asks the same question.
+    seats2(app)[3].click();
     app.render();
     expect(app.output.querySelectorAll(".hot-row").length).toBeGreaterThan(40);
 
@@ -1882,11 +2278,15 @@ describe("choosing who to measure against", () => {
     expect(showing("groups")).toBe(false);
     expect(showing("overlap")).toBe(false);
 
-    // Preflop there is no board to be measured on at all.
+    // Preflop the two equity views still measure - a pass over the flops works
+    // them out - so the control stays with them. Hotness asks how the next card
+    // treats a hand, and there is no next card yet.
     mutate((engine) => engine.setBoard(""));
     app.render();
     expect(state().board).toBe("");
-    expect(showing("eq-graph")).toBe(false);
+    expect(showing("eq-graph")).toBe(true);
+    expect(showing("eq-matrix")).toBe(true);
+    expect(showing("hotness")).toBe(false);
   });
 
   test("the graph draws the opponent in that seat's colour", async () => {
@@ -2780,12 +3180,26 @@ describe("the library", () => {
     // the big blind has an isolate the raked set has no chart for.
     expect(chip(app, "cash", "defend", "SB limp")).toBeDefined();
 
-    // Editing the range by hand puts the light out: it is no longer that chart.
+    // Editing the range by hand does not put the light out - the reader is
+    // still in that spot - but it goes dashed, and the switch that says how
+    // charts arrive goes away with the chart it was about.
+    const lit = () => app.range.querySelector<HTMLElement>(".seat-chip.active")!;
+    expect(lit().classList.contains("edited")).toBe(false);
+    expect(app.range.querySelector<HTMLElement>(".library-trim")!.hidden).toBe(false);
     type(app, "22+");
-    expect(
-      app.range.querySelectorAll(".seat-chip.active"),
-      "no chip should claim a hand-typed range",
-    ).toHaveLength(0);
+    expect(lit(), "the chart is still the spot the reader chose").toBeDefined();
+    expect(lit().classList.contains("edited")).toBe(true);
+    expect(app.range.querySelector<HTMLElement>(".stack-chip.active")!.classList).toContain(
+      "edited",
+    );
+    expect(app.range.querySelector<HTMLElement>(".library-trim")!.hidden).toBe(true);
+
+    // Clearing is starting again rather than editing, so the light does go out.
+    Array.from(app.range.querySelectorAll<HTMLButtonElement>(".btn.quick"))
+      .find((button) => button.textContent === "Clear")!
+      .click();
+    app.render();
+    expect(app.range.querySelectorAll(".seat-chip.active")).toHaveLength(0);
   });
 
   test("clearing the marks does not leave the next range with no opinion", async () => {
@@ -2851,6 +3265,232 @@ describe("the flops panel", () => {
  * were built a day apart and have to agree about what the reader asked for.
  * Nearly everything that has gone wrong in this app has gone wrong in a seam.
  */
+describe("pointing at a hand", () => {
+  /*
+   * The panels all speak about hands, so pointing at one anywhere is the same
+   * question everywhere: what is this hand, here, on this board. These check
+   * that the answer travels - and that the number is a share, because a cell is
+   * up to sixteen hands and only some of them may make the thing.
+   */
+  const lit = (app: App) =>
+    Array.from(app.stats.querySelectorAll<HTMLElement>(".stat-row.makes")).map(
+      (row) => row.querySelector(".stat-label")!.textContent,
+    );
+  const share = (app: App, label: string) =>
+    Number(row(app, label).style.getPropertyValue("--makes") || "0");
+
+  test("hovering a hand lights what it makes, in shares", async () => {
+    const app = await open();
+    // Two hearts, and the ace not one of them: putting the ace of hearts on the
+    // board would take away the one combination of AKs the test is about.
+    card(app.board, "Ad");
+    card(app.board, "Qh");
+    card(app.board, "8h");
+    type(app, "AA,AKs,76s");
+    app.render();
+
+    // Aces on an ace-high board are trips, every combination of them.
+    peek(app, "AA");
+    expect(lit(app)).toContain("set");
+    expect(share(app, "set")).toBe(1);
+    expect(row(app, "set").classList.contains("makes-some")).toBe(false);
+
+    // Ace-king suited is top pair whichever suit it is - but a flushdraw only
+    // in hearts, and the ace of hearts is on the board, so of the three
+    // combinations left exactly one has it.
+    peek(app, "AKs");
+    expect(lit(app)).toContain("top pair");
+    expect(share(app, "top pair")).toBe(1);
+    // Written into the style with three decimals, which is as fine as a width
+    // or a shade ever needs to be.
+    expect(share(app, "flushdraw")).toBeCloseTo(1 / 3, 2);
+    expect(row(app, "flushdraw").classList.contains("makes-some")).toBe(true);
+
+    // And moving off says nothing at all rather than saying nought.
+    peek(app, "AA");
+    app.range
+      .querySelector<HTMLElement>(".matrix")!
+      .dispatchEvent(new window.MouseEvent("pointerleave", { bubbles: true }));
+    app.render();
+    expect(lit(app)).toEqual([]);
+  }, 30000);
+
+  test("a hand in two painted categories wears both colours, and the table keeps its place", async () => {
+    const app = await open();
+    // Two hearts and the ace elsewhere, so ace-king suited can be top pair and
+    // a flushdraw at the same time.
+    card(app.board, "Ad");
+    card(app.board, "Qh");
+    card(app.board, "8h");
+    type(app, "AKs,AQs,99,76s");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "JJ+,AKo");
+    seats2(app)[0].click();
+    app.render();
+
+    headButton(app.stats, "Clear").click();
+    app.render();
+    const paint = (colour: string, label: string) => {
+      swatch(app, colour).click();
+      app.render();
+      row(app, label).click();
+      app.render();
+    };
+    paint("blue", "top pair");
+    paint("green", "flushdraw");
+
+    tab(app, "eq-graph").click();
+    app.render();
+    const hands = Array.from(app.output.querySelectorAll<HTMLElement>(".eq-hand"));
+    const named = (name: string) => hands.find((hand) => hand.textContent === name)!;
+
+    // The ace of hearts with the king of hearts is both, so the row is shared
+    // between the two colours rather than one of them winning.
+    const both = named("A♥K♥");
+    expect(both.dataset.colours).toBe("2");
+    expect(both.style.background).toMatch(/linear-gradient/);
+    expect(both.style.background).toContain("--group-1");
+    expect(both.style.background).toContain("--group-2");
+
+    // Its own suits are top pair and nothing else.
+    expect(named("A♠K♠").dataset.colours).toBe("1");
+    expect(named("A♠K♠").style.getPropertyValue("--mark")).toBe("var(--group-1)");
+    // And a flushdraw with no pair is the other colour on its own.
+    expect(named("7♥6♥").dataset.colours).toBe("1");
+    expect(named("7♥6♥").style.getPropertyValue("--mark")).toBe("var(--group-2)");
+
+    // The same hand in the breakdown wears the same two colours, and the one
+    // that decides - the one the street filters act on - is the first band.
+    const popup = pin(app, "AKs");
+    const suit = (name: string) =>
+      popup.querySelector<HTMLElement>(`.suit-cell[data-name="${name}"]`)!;
+    expect(suit("AhKh").style.getPropertyValue("--groups")).toMatch(/linear-gradient/);
+    expect(suit("AhKh").dataset.colour).toBe(
+      state().marks[statDefs.findIndex((d) => d.key === "flushdraw")],
+    );
+    expect(suit("AsKs").style.getPropertyValue("--groups")).toBe("");
+    expect(suit("AsKs").dataset.colour).toBe("blue");
+    app.press("Escape");
+
+    // The table scrolls, and it used to be rebuilt on every repaint - including
+    // the repaints the reader's own pointer set off by crossing its rows, which
+    // is what a wheel does to a table under a still pointer. A fresh table
+    // arrives scrolled to the top, so scrolling it fought back. Pointing at a
+    // hand now moves a class and leaves the table where it is.
+    const table = app.output.querySelector<HTMLElement>(".eq-table")!;
+    table.scrollTop = 120;
+    table.dataset.mark = "original";
+    const rows = Array.from(
+      app.output.querySelectorAll<HTMLElement>(".eq-table .eq-row:not(.eq-head)"),
+    );
+    rows[2].dispatchEvent(new window.MouseEvent("pointerenter", { bubbles: true }));
+    app.render();
+    const after = app.output.querySelector<HTMLElement>(".eq-table")!;
+    expect(after.dataset.mark, "the same table, not a new one").toBe("original");
+    expect(after.scrollTop).toBe(120);
+    expect(rows[2].classList.contains("peek"), "and it knows what is pointed at").toBe(true);
+
+    // A real change does rebuild it, or the view would go stale.
+    paint("red", "two pair");
+    expect(app.output.querySelector<HTMLElement>(".eq-table")!.dataset.mark).toBeUndefined();
+  }, 30000);
+
+  test("a hand pointed at in the equity table is the hand outlined in the matrix", async () => {
+    const app = await open();
+    card(app.board, "Ad");
+    card(app.board, "Qh");
+    card(app.board, "8h");
+    type(app, "AA,KK");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "QQ,JJ");
+    seats2(app)[0].click();
+    app.render();
+    tab(app, "eq-graph").click();
+    app.render();
+
+    // Not the heading, which is an `.eq-row` too and answers to nothing.
+    const hands = Array.from(
+      app.output.querySelectorAll<HTMLElement>(".eq-table .eq-row:not(.eq-head)"),
+    );
+    expect(hands.length).toBeGreaterThan(0);
+    hands[0].dispatchEvent(new window.MouseEvent("pointerenter", { bubbles: true }));
+    app.render();
+
+    // The matrix outlines the cell that hand belongs to, and the statistics
+    // light what it makes - from a pointer that never left the output panel.
+    const outlined = app.range.querySelector<HTMLElement>(".cell.peek");
+    expect(outlined, "the matrix says which hand that is").not.toBeNull();
+    expect(outlined!.querySelector(".cell-label")!.textContent).toBe("AA");
+    expect(lit(app)).toContain("set");
+
+    // Every hand of the range is washed in the colour it was painted, so the
+    // table reads as the same range the matrix is showing.
+    const washed = Array.from(app.output.querySelectorAll<HTMLElement>(".eq-hand")).filter(
+      (hand) => (hand.dataset.colour ?? "none") !== "none",
+    );
+    expect(washed.length).toBeGreaterThan(0);
+    expect(washed[0].style.getPropertyValue("--mark")).toMatch(/var\(--group-\d\)/);
+  }, 30000);
+});
+
+describe("the equity slider", () => {
+  test("stops where the equity changes, and nowhere in between", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7d");
+    card(app.board, "2c");
+    type(app, "AA,KK,QQ,JJ,AKs");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "A2s+,KQs");
+    seats2(app)[0].click();
+    app.render();
+
+    const slider = app.stats.querySelector<HTMLInputElement>(".share-slider")!;
+    const drag = (to: number) => {
+      slider.value = String(to);
+      slider.dispatchEvent(new window.Event("input", { bubbles: true }));
+      app.render();
+      return Number(slider.value);
+    };
+
+    // The track carries a mark at each stop, so the snapping reads as the shape
+    // of the range rather than as a sticky control.
+    expect(slider.style.getPropertyValue("--ticks")).toMatch(/linear-gradient/);
+    expect(slider.step).toBe("any");
+
+    // Dropped anywhere, it lands on a stop - and the stop is what gets painted,
+    // so the thumb and the number under it say the same thing.
+    const landed = drag(37);
+    expect(landed).toBeLessThanOrEqual(37);
+    expect(landed).toBeGreaterThan(0);
+    expect(chrome.cut!.covered).toBeCloseTo(landed / 100, 6);
+
+    // Everywhere in the gap it just left is the same place, which is why the
+    // gap is worth skipping.
+    const justAbove = drag(landed + 0.3);
+    const higher = drag(landed + 0.6);
+    expect(justAbove).toBe(higher);
+
+    // Below it is the stop before, which paints less. The slider paints rather
+    // than narrows, so what moves is the share carrying a colour - the range
+    // itself stays exactly as it was typed.
+    const typed = state().players[state().active].notation;
+    const painted = () =>
+      state()
+        .groupShares.slice(1)
+        .reduce((sum, share) => sum + share, 0);
+    drag(landed);
+    const atStop = painted();
+    const below = drag(landed - 0.5);
+    expect(below).toBeLessThan(landed);
+    expect(painted()).toBeLessThan(atStop);
+    expect(state().players[state().active].notation, "painting is not narrowing").toBe(typed);
+  }, 30000);
+});
+
 describe("the palette", () => {
   test("offers five colours and a way to take them off", async () => {
     const app = await open();
@@ -2916,7 +3556,7 @@ describe("one thing on top of another", () => {
     // depth carrying a spot across.
     stackChip(app, "80bb").click();
     app.render();
-    expect(chrome.libraryChart?.id).toBe("mtt-80bb-open-utg");
+    expect(state().players[state().active].chart).toBe("mtt-80bb-open-utg");
     expect(chrome.libraryNoZeroEv, "the switch is not undone by a depth").toBe(true);
     const trimmed80 = notation();
 
@@ -2926,7 +3566,7 @@ describe("one thing on top of another", () => {
     // which is told by turning the switch off and watching it grow.
     trim.click();
     app.render();
-    expect(chrome.libraryChart?.id).toBe("mtt-80bb-open-utg");
+    expect(state().players[state().active].chart).toBe("mtt-80bb-open-utg");
     expect(notation(), "the depth arrived trimmed").not.toBe(trimmed80);
     expect(state().players[state().active].percent).toBeGreaterThan(16);
   }, 60000);
@@ -2953,9 +3593,10 @@ describe("one thing on top of another", () => {
     await vi.waitFor(() => expect(chrome.preflop).not.toBeNull(), { timeout: 30000 });
     app.render();
     expect(chrome.preflop!.flops).toBe(narrow);
-    // Having run, the button offers to run it again rather than repeating the
-    // count; the count is on it before anybody has asked.
-    expect(app.stats.querySelector(".filter-toggle")!.textContent).toBe("Run it again");
+    // Having run, there is nothing to ask for: the button is gone. Running it
+    // again would hand back the same answer, since the pass is kept under what
+    // it was a pass over.
+    expect(app.stats.querySelector<HTMLElement>(".filter-toggle")!.hidden).toBe(true);
     card(app.strip, "Ad");
     app.render();
     expect(chrome.preflop, "moving a dead card retires the pass").toBeNull();
@@ -3328,7 +3969,7 @@ describe("over every flop at once", () => {
     await vi.waitFor(() => expect(chrome.preflop).not.toBeNull(), { timeout: 30000 });
     app.render();
     expect(numbers()).toMatch(/^\d+\.\d%$/);
-    expect(button().textContent).toBe("Run it again");
+    expect(button().hidden, "nothing left to ask for").toBe(true);
 
     // Every hand against every flop is twenty-six million, which is seconds of
     // a page that cannot be typed into. That one is asked for.
@@ -3362,6 +4003,33 @@ describe("over every flop at once", () => {
     expect(chrome.preflop!.rows.find((row) => row.key === "flush")!.fraction).toBeGreaterThan(0.02);
   }, 90000);
 
+  test("changing how hands are classified asks the pass again rather than emptying it", async () => {
+    const app = await open();
+    const button = () => app.stats.querySelector<HTMLButtonElement>(".filter-toggle")!;
+    const backdoor = () => reading(app, "2 crd bckdr fd").value;
+
+    type(app, "AhKs");
+    await vi.waitFor(() => expect(chrome.preflop).not.toBeNull(), { timeout: 30000 });
+    app.render();
+    expect(button().hidden).toBe(true);
+    const before = backdoor();
+
+    // The setting changes how every hand of the pass was classified, so the
+    // pass cannot be re-read - it has to be run again. Retiring it and waiting
+    // to be asked emptied the panel and put the button back, which reads as the
+    // checkbox having broken something.
+    app.menubar.querySelector<HTMLInputElement>("input[type=checkbox]")!.click();
+    await vi.waitFor(() => expect(chrome.preflop).not.toBeNull(), { timeout: 30000 });
+    app.render();
+    expect(button().hidden, "nothing to ask for: it asked itself").toBe(true);
+    expect(backdoor()).toBe(before);
+
+    // And the rows the setting is about now have numbers in them, where before
+    // they were not shown at all.
+    expect(reading(app, "1 crd bdfd high").value).toMatch(/^\d+\.\d%$/);
+    expect(Number.parseFloat(reading(app, "1 crd bdfd high").value)).toBeGreaterThan(0);
+  }, 60000);
+
   test("each seat keeps its own pass, so comparing two costs one run each", async () => {
     const app = await open();
     const button = () => app.stats.querySelector<HTMLButtonElement>(".filter-toggle")!;
@@ -3393,7 +4061,7 @@ describe("over every flop at once", () => {
     app.render();
     expect(chrome.preflop, "the pass came back with the seat").not.toBeNull();
     expect(reading(app, "flushdraw").value).toBe(suited);
-    expect(button().textContent).toMatch(/Run it again/);
+    expect(button().hidden, "and needs no asking for").toBe(true);
   }, 90000);
 
   test("ticking flop groups narrows the pass, and the narrowing outlives the seat", async () => {

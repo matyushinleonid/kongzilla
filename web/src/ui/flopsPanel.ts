@@ -29,10 +29,16 @@ import {
   dealFlopFrom,
   flopBreakdown,
   repaint,
+  revision,
   state,
   toggleFlopGroup,
 } from "../store";
 import { die } from "./cards";
+import type { FlopBreakdown } from "../types";
+
+/** The flop counts, and the session they were counted for. */
+let counted: FlopBreakdown = { total: 0, kept: 0, axes: [] };
+let countedAt = -1;
 
 export function createFlopsPanel(): { element: HTMLElement; render: () => void } {
   const panel = document.createElement("section");
@@ -94,7 +100,14 @@ export function createFlopsPanel(): { element: HTMLElement; render: () => void }
     fold.title = chrome.flopsOpen ? "Fold the flops panel away (F)" : "Open the flops panel (F)";
     fold.setAttribute("aria-expanded", String(chrome.flopsOpen));
 
-    const result = flopBreakdown();
+    // Counted when the session changes, not when the pointer moves: it walks
+    // all 22,100 flops and buckets each one four ways, and a repaint is far
+    // more often a hover than a change.
+    if (countedAt !== revision()) {
+      countedAt = revision();
+      counted = flopBreakdown();
+    }
+    const result = counted;
     const view = state();
     // Ticking is about what a pass averages over, and a dealt flop is not an
     // average of anything.

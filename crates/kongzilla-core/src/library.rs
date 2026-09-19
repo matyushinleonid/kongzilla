@@ -36,6 +36,9 @@ pub enum Stack {
     Bb40,
     /// Around 20 big blinds.
     Bb20,
+    /// Six-handed NL10 cash at 100 big blinds, raked. The same game a stake
+    /// down: more rake per pot in proportion, so tighter again than NL25.
+    Nl10,
     /// Six-handed NL25 cash at 100 big blinds - a raked game, so its ranges are
     /// tighter than the tournament ones at the same depth. Grouped here because
     /// this is where the reader picks between them, not because it is a depth.
@@ -48,12 +51,13 @@ pub enum Stack {
 
 impl Stack {
     /// Every depth, deepest first.
-    pub const ALL: [Stack; 7] = [
+    pub const ALL: [Stack; 8] = [
         Self::Bb100,
         Self::Bb80,
         Self::Bb60,
         Self::Bb40,
         Self::Bb20,
+        Self::Nl10,
         Self::Nl25,
         Self::Cash100,
     ];
@@ -66,6 +70,7 @@ impl Stack {
             Self::Bb60 => "60bb",
             Self::Bb40 => "40bb",
             Self::Bb20 => "20bb",
+            Self::Nl10 => "NL10",
             Self::Nl25 => "NL25",
             Self::Cash100 => "cEV",
         }
@@ -75,7 +80,7 @@ impl Stack {
     /// they are not offered side by side as if they were two depths of one thing.
     pub const fn game(self) -> &'static str {
         match self {
-            Self::Nl25 | Self::Cash100 => "cash",
+            Self::Nl10 | Self::Nl25 | Self::Cash100 => "cash",
             _ => "mtt",
         }
     }
@@ -83,6 +88,7 @@ impl Stack {
     /// What the depth is, in words, for the chip's tooltip.
     pub const fn description(self) -> &'static str {
         match self {
+            Self::Nl10 => "Six-handed NL10 cash, 100bb effective, raked, cold calls at 2.5x",
             Self::Nl25 => "Six-handed NL25 cash, 100bb effective, raked, cold calls at 2.5x",
             Self::Cash100 => "Six-handed cash, 100bb effective, no rake, cold calls at 2.5x",
             _ => "Eight-handed tournament play, chip-EV, no rake",
@@ -320,10 +326,10 @@ mod tests {
 
     #[test]
     fn every_chart_is_addressable_and_parses() {
-        // Four complete tournament depths, twenty blinds complete as well, and
-        // two six-handed cash games with no UTG1 or LJ to speak of - the raked
-        // one without a limp to isolate, the rakeless one with.
-        assert_eq!(CHARTS.len(), 5 * 15 + 10 + 11);
+        // Five complete tournament depths, and three six-handed cash games with
+        // no UTG1 or LJ to speak of - each with the five opens, the five
+        // defences and the limp to isolate.
+        assert_eq!(CHARTS.len(), 5 * 15 + 3 * 11);
         for chart in CHARTS {
             let range = chart
                 .range()
@@ -527,6 +533,56 @@ mod tests {
         let range = iso.range().expect("it parses");
         assert!(range.combo_count() > 0.0);
         assert!(iso.size_bb <= 3.0, "raising a limp is small this shallow");
+    }
+
+    #[test]
+    fn the_stakes_are_three_readings_of_one_game() {
+        // Each cash game holds the same spots, so a reader can put the same
+        // question to all three and read the rake off the difference.
+        for stack in [Stack::Nl10, Stack::Nl25, Stack::Cash100] {
+            assert_eq!(stack.game(), "cash");
+            for seat in [Seat::Utg, Seat::Hj, Seat::Co, Seat::Btn] {
+                assert!(
+                    chart_for(stack, Spot::Open, seat).is_some(),
+                    "{stack:?} {seat:?}"
+                );
+                assert!(
+                    chart_for(stack, Spot::Defend, seat).is_some(),
+                    "{stack:?} {seat:?}"
+                );
+            }
+            assert!(
+                chart_for(stack, Spot::RaiseFirstIn, Seat::Sb).is_some(),
+                "{stack:?}"
+            );
+            assert!(
+                chart_for(stack, Spot::Defend, Seat::Sb).is_some(),
+                "{stack:?}"
+            );
+            assert!(
+                chart_for(stack, Spot::Isolate, Seat::Sb).is_some(),
+                "{stack:?}"
+            );
+            // Six-handed: the two seats an eight-handed table adds are not there.
+            assert!(
+                chart_for(stack, Spot::Open, Seat::Utg1).is_none(),
+                "{stack:?}"
+            );
+            assert!(
+                chart_for(stack, Spot::Open, Seat::Lj).is_none(),
+                "{stack:?}"
+            );
+        }
+
+        // Rake tightens an opening range, and there is more of it per pot at a
+        // lower stake - so the order of the three is the order of the rake.
+        let opens = |stack| {
+            chart_for(stack, Spot::Open, Seat::Utg)
+                .expect("an opening chart")
+                .percent()
+        };
+        assert!(opens(Stack::Nl10) < opens(Stack::Cash100), "rake tightens");
+        assert!(opens(Stack::Nl25) < opens(Stack::Cash100), "rake tightens");
     }
 
     #[test]

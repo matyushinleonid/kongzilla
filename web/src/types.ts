@@ -47,6 +47,13 @@ export interface PlayerView {
   percent: number;
   /** Mean weight per matrix cell, for the seat's thumbnail. */
   classWeights: number[];
+  /** Where the range slider's two handles sit, as percentages of the deck. */
+  sliderLow: number;
+  sliderHigh: number;
+  /** The library chart this seat was loaded from, if it was. */
+  chart: string | null;
+  /** Whether the matrix still holds that chart rather than an edit of it. */
+  chartEdited: boolean;
 }
 
 export interface ClassifyOptions {

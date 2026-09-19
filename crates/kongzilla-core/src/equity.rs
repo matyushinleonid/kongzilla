@@ -9,8 +9,9 @@
 //! with a fixed seed, which keeps repeated calls reproducible.
 
 use crate::board::Board;
-use crate::cards::{Card, CardSet, Combo, NUM_CARDS, NUM_COMBOS};
+use crate::cards::{Card, CardSet, Combo, HandClass, NUM_CARDS, NUM_COMBOS};
 use crate::eval::eval;
+use crate::flops::FlopFilter;
 use crate::range::Range;
 use crate::rng::Rng;
 
@@ -42,6 +43,35 @@ pub struct EquityReport {
 
 /// How many samples a preflop estimate draws.
 pub const PREFLOP_SAMPLES: u32 = 200_000;
+
+/// The most boards a preflop per-combo pass runs out.
+///
+/// Every board is scored for every hand at once - the walk below sorts the two
+/// ranges by strength and goes through them together - so one board is one
+/// sample for all 1326 hands, not for one of them. Ten thousand of them puts
+/// the typical hand within three tenths of a point of its true equity and the
+/// worst within two thirds of one, measured against the hand-at-a-time sampler
+/// at two hundred thousand samples.
+pub const PREFLOP_BOARDS: u32 = 10_000;
+
+/// About how many hands a preflop pass is willing to evaluate, both sides
+/// together.
+///
+/// A board costs the two ranges laid end to end, so two full matrices cost
+/// three and a half times what two forty-percent ranges do. Rather than let
+/// that run to four seconds, the board count comes down to meet it: about
+/// seven tenths of a point of error instead of three, and a second or so of
+/// waiting whatever is in the two matrices.
+const PREFLOP_EVALS: u64 = 20_000_000;
+
+/// How many boards a pass between these two ranges would run out.
+///
+/// Both curves are worked out - the graph draws the pair - so the budget is
+/// split between them.
+pub fn preflop_boards(a: &Range, b: &Range, dead: CardSet) -> u32 {
+    let per_board = 2 * (a.live(dead).len() + b.live(dead).len()) as u64;
+    (PREFLOP_EVALS / per_board.max(1)).min(u64::from(PREFLOP_BOARDS)) as u32
+}
 
 /// How many samples a multiway estimate draws once the board is out.
 ///
@@ -140,7 +170,7 @@ pub fn range_vs_ranges(ranges: &[&Range], board: &Board, dead: CardSet) -> Optio
     }
 
     match (lives.len(), board.is_empty()) {
-        (2, false) => Some(enumerate(&lives[0], &lives[1], board, blocked).report),
+        (2, false) => Some(enumerate(&lives[0], &lives[1], board, blocked, None).report),
         (2, true) => Some(monte_carlo(&lives[0], &lives[1], blocked, PREFLOP_SAMPLES)),
         _ => Some(monte_carlo_many(
             &lives,
@@ -157,12 +187,56 @@ pub fn range_vs_ranges(ranges: &[&Range], board: &Board, dead: CardSet) -> Optio
 
 /// Equity for each of the first range's combos.
 ///
-/// Returns `None` preflop, where the estimate is sampled and per-hand numbers
-/// would be far too noisy to paint.
+/// Returns `None` preflop: see [`equity_by_combo_preflop`], which answers the
+/// same question by sampling and costs about a second to do it. Keeping the two
+/// apart is deliberate - everything that reads per-combo equity reads it on
+/// every redraw, and none of that may quietly turn into a second of work.
 pub fn equity_by_combo(a: &Range, b: &Range, board: &Board, dead: CardSet) -> Option<ComboEquity> {
     if board.is_empty() || !board.is_dealt() {
         return None;
     }
+    by_combo(a, b, board, dead, None)
+}
+
+/// Equity for each of the first range's combos, before there is a board.
+///
+/// Exact is out of reach: there are 2.6 million boards, and scoring every one
+/// of them takes minutes rather than the second this takes. So boards are
+/// sampled - from a fixed seed, so the same question twice gives the same
+/// answer - and each is scored for every hand at once by the same walk the flop
+/// uses. A hand is only scored on the boards that do not deal it its own cards,
+/// which is the conditional the answer wants anyway.
+///
+/// `filter` is the reader's ticks in the flops panel, and the flops are drawn
+/// from what those leave: asking what a range is worth on paired boards is a
+/// different question from asking what it is worth, and the panel that asks one
+/// should not quietly answer the other.
+///
+/// Returns `None` when there is nothing to measure, or when the ticks leave no
+/// flop to deal.
+pub fn equity_by_combo_preflop(
+    a: &Range,
+    b: &Range,
+    dead: CardSet,
+    filter: FlopFilter,
+) -> Option<ComboEquity> {
+    let flops: Vec<Board> = Board::all_flops()
+        .filter(|flop| !flop.mask().intersects(dead) && filter.matches(flop))
+        .collect();
+    if flops.is_empty() {
+        return None;
+    }
+    let boards = preflop_boards(a, b, dead);
+    by_combo(a, b, &Board::empty(), dead, Some((&flops, boards)))
+}
+
+fn by_combo(
+    a: &Range,
+    b: &Range,
+    board: &Board,
+    dead: CardSet,
+    sampled: Option<(&[Board], u32)>,
+) -> Option<ComboEquity> {
     let blocked = board.mask().union(dead);
     let a_live = a.live(blocked);
     let b_live = b.live(blocked);
@@ -170,7 +244,10 @@ pub fn equity_by_combo(a: &Range, b: &Range, board: &Board, dead: CardSet) -> Op
         return None;
     }
 
-    let result = enumerate(&a_live, &b_live, board, blocked);
+    let mut result = enumerate(&a_live, &b_live, board, blocked, sampled);
+    if sampled.is_some() {
+        pool_by_cell(&mut result);
+    }
     let mut equity = vec![-1.0f32; NUM_COMBOS];
     let mut weight = vec![0.0f32; NUM_COMBOS];
     let mut win = vec![0.0f32; NUM_COMBOS];
@@ -230,11 +307,17 @@ fn card_name(card: Card) -> &'static str {
     NAMES[card.index() as usize]
 }
 
+/// Scores a range against a range, one run-out at a time.
+///
+/// `sampled` is the flops to draw from and how many boards to draw, for when
+/// there is no board at all. With cards already down the run-outs are
+/// enumerated and it is ignored.
 fn enumerate(
     a_live: &[(Combo, f32)],
     b_live: &[(Combo, f32)],
     board: &Board,
     blocked: CardSet,
+    sampled: Option<(&[Board], u32)>,
 ) -> Enumerated {
     let deck: Vec<Card> = CardSet::FULL.difference(blocked).iter().collect();
     let to_come = Board::MAX - board.len();
@@ -328,6 +411,7 @@ fn enumerate(
         }
     };
 
+    let exact = to_come <= 2;
     match to_come {
         0 => visit(CardSet::EMPTY),
         1 => {
@@ -342,13 +426,36 @@ fn enumerate(
                 }
             }
         }
-        _ => unreachable!("a dealt board has three to five cards"),
+        // No board at all: five to come, 2.6 million of them, so they are drawn
+        // rather than walked. The flop comes from the list the reader's ticks
+        // left; the turn and the river are whatever the deck gives.
+        Board::MAX => {
+            let Some((flops, boards)) = sampled else {
+                unreachable!("a preflop pass says which flops it is over")
+            };
+            let mut rng = Rng::new(MONTE_CARLO_SEED);
+            for _ in 0..boards {
+                let flop = flops[rng.below(flops.len() as u32) as usize];
+                let mut runout = flop.mask();
+                let mut drawn = 3;
+                while drawn < Board::MAX {
+                    let card = deck[rng.below(deck.len() as u32) as usize];
+                    if runout.contains(card) {
+                        continue;
+                    }
+                    runout.insert(card);
+                    drawn += 1;
+                }
+                visit(runout);
+            }
+        }
+        _ => unreachable!("a board is empty or has three to five cards"),
     }
 
     let report = if total_weight <= 0.0 {
         EquityReport {
             players: vec![Equity::default(); 2],
-            exact: true,
+            exact,
             trials,
         }
     } else {
@@ -365,7 +472,7 @@ fn enumerate(
                     equity: b_equity / total_weight,
                 },
             ],
-            exact: true,
+            exact,
             trials,
         }
     };
@@ -376,6 +483,54 @@ fn enumerate(
         denominator,
         wins,
         ties,
+    }
+}
+
+/// Pools a sampled pass across each matrix cell.
+///
+/// Before a board is dealt there is nothing to tell one pair of aces from
+/// another: any two of the six can be swapped by renaming the suits, and a
+/// range that names suits the same way for both is answering the same question
+/// twice. The sampler does not know that, so it hands back six numbers a
+/// tenth of a point apart - which is noise wearing the clothes of a finding,
+/// and a reader looking at the equity table sees six aces with six equities and
+/// rightly disbelieves all of them.
+///
+/// Adding the six together before dividing fixes that, and takes about a fifth
+/// off the error while it is there. Only a fifth, because the six are scored on
+/// the same boards and their errors lean the same way: what this buys is one
+/// answer where there were six, not six times the samples.
+///
+/// Where the deck really is lopsided, with a card dead in one suit and not
+/// another, the six stop being identical and this smooths over a difference
+/// that is real. It is a fraction of a point, smaller than what the sampling
+/// can see, and the alternative is six numbers that disagree for a reason
+/// nobody can read off the screen.
+fn pool_by_cell(result: &mut Enumerated) {
+    for class in HandClass::all() {
+        let mut totals = [0.0f64; 4];
+        for combo in class.combos() {
+            let at = combo.index() as usize;
+            totals[0] += result.numerator[at];
+            totals[1] += result.denominator[at];
+            totals[2] += result.wins[at];
+            totals[3] += result.ties[at];
+        }
+        if totals[1] <= 0.0 {
+            continue;
+        }
+        for combo in class.combos() {
+            let at = combo.index() as usize;
+            // A hand nobody holds keeps its nothing, so the matrix can still
+            // tell "not in the range" from "in it and worth this".
+            if result.denominator[at] <= 0.0 {
+                continue;
+            }
+            result.numerator[at] = totals[0];
+            result.denominator[at] = totals[1];
+            result.wins[at] = totals[2];
+            result.ties[at] = totals[3];
+        }
     }
 }
 

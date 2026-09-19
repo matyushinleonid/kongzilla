@@ -22,9 +22,12 @@ import {
   chrome,
   clearCut,
   compareBreakdown,
+  equitySteps,
+  revision,
   hoverBreakdown,
   mutate,
   markColour,
+  peekStats,
   palette,
   repaint,
   runPreflop,
@@ -220,7 +223,11 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
   shareSlider.type = "range";
   shareSlider.min = "0";
   shareSlider.max = "100";
-  shareSlider.step = "1";
+  // Any position, and then snapped to the nearest step below: equity across a
+  // range is a staircase, so most of the positions on a smooth slider paint
+  // exactly what the one beside them paints. The reader still drags anywhere;
+  // what they let go of is a step.
+  shareSlider.step = "any";
   shareSlider.className = "slider share-slider";
   shareSlider.setAttribute("aria-label", "Share of the range to paint, by equity");
   const shareValue = document.createElement("span");
@@ -230,7 +237,8 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
   shareRow.append(shareLabel, shareSlider, shareValue, cutClear);
 
   shareSlider.addEventListener("input", () => {
-    chrome.continueShare = Number(shareSlider.value) / 100;
+    chrome.continueShare = snapToStep(Number(shareSlider.value) / 100);
+    shareSlider.value = String(chrome.continueShare * 100);
     if (chrome.continueShare >= 1) {
       clearCut();
       return;
@@ -275,9 +283,11 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
   /**
    * Marks which edges have more list behind them.
    *
-   * Called on every render as well as on scroll, because the list changes
-   * height whenever the board or the range does: a panel with nothing more to
-   * show can acquire it without anybody touching the scrollbar.
+   * Reading `scrollHeight` is a question about layout, and asking it straight
+   * after changing the rows makes the browser lay the page out there and then
+   * to answer. Doing that on every repaint cost a third of the time a hover
+   * took - so it is asked when the list can actually have changed height: when
+   * the session moved, when the reader scrolled, or when the window resized.
    */
   const markEdges = () => {
     const hidden = body.scrollHeight - body.clientHeight;
@@ -285,9 +295,18 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
     body.classList.toggle("more-below", hidden - body.scrollTop > 1);
   };
   body.addEventListener("scroll", markEdges, { passive: true });
+  window.addEventListener("resize", markEdges);
+
+  /** The session the edges were last measured for. */
+  let edgesAt = -1;
 
   const render = () => {
     const view = state();
+    // What the hand under the pointer is about, wherever the pointer is: the
+    // matrix, the suit breakdown, or one of the equity views. Pointing at a
+    // hand and pointing at a row are the same question asked from the two
+    // ends, and the panel answers both.
+    const peek = peekStats();
     preflopMode = view.board === "";
     const source = preflopMode
       ? { rows: chrome.preflop?.rows ?? [] }
@@ -327,8 +346,20 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
 
     // Preflop the per-combo equities are sampled, and far too noisy to cut on.
     shareRow.hidden = preflopMode;
+    // Worked out when the session changes and not when the pointer moves. It
+    // sorts the whole range, and repaints are mostly hovers: doing it on every
+    // one of those put a third of a second between the pointer arriving on a
+    // hand and the panel lighting up.
+    if (stepsAt !== revision() || preflopMode) {
+      stepsAt = revision();
+      steps = preflopMode ? new Float32Array() : equitySteps();
+      shareSlider.style.setProperty("--ticks", ticks());
+    }
     if (document.activeElement !== shareSlider) {
-      shareSlider.value = String(Math.round(chrome.continueShare * 100));
+      // Exactly where it stands, not rounded to a whole percent: it stands on
+      // a step of the staircase, and rounding moved it off the step it had
+      // just been snapped to - so the thumb and the number under it disagreed.
+      shareSlider.value = String(chrome.continueShare * 100);
     }
     // Equity is equity against somebody, and which somebody is chosen over in
     // the output panel. The slider names it, because a control that quietly
@@ -385,6 +416,14 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
           : "empty"
         : (view.marks[index] ?? "empty");
       paintRow(row, index, data, mark, index === chrome.hovered, versus, versusSeat);
+      // A share rather than a yes: a cell is up to sixteen hands and only some
+      // of them may make this, and half a cell making top pair is worth
+      // telling apart from all of it.
+      const share = peek?.[index] ?? 0;
+      row.element.classList.toggle("makes", share > 0);
+      row.element.classList.toggle("makes-some", share > 0 && share < 0.999);
+      if (share > 0) row.element.style.setProperty("--makes", share.toFixed(3));
+      else row.element.style.removeProperty("--makes");
     }
 
     streetRow.hidden = preflopMode;
@@ -413,16 +452,23 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
       const narrowed = view.flopGroups.length > 0;
       const cheap = preflopIsCheap();
       const count = view.filteredFlops.toLocaleString();
-      // The label does not get a fourth state for "about to run itself": that
-      // state lasts a quarter of a second, and a button captioned with
-      // something it is not going to be asked to do reads as a broken one.
+      // Gone once there is a pass. It offered to run it again, and running it
+      // again gave the same answer instantly - the pass is kept under what it
+      // was a pass over, so asking twice is the same question. A button whose
+      // press changes nothing is worse than no button.
+      //
+      // It comes back the moment the pass stops applying: change the range,
+      // the dead cards or the ticked flops and there is something to ask for
+      // again, and the caption says what.
+      preflopButton.hidden = chrome.preflop !== null && !chrome.preflopRunning;
+      // The label does not get a state for "about to run itself": that lasts a
+      // quarter of a second, and a button captioned with something it is not
+      // going to be asked to do reads as a broken one.
       preflopButton.textContent = chrome.preflopRunning
         ? `Working through ${count} flops…`
-        : chrome.preflop
-          ? "Run it again"
-          : narrowed
-            ? `Calculate over the ${count} flops picked`
-            : `Calculate over all ${count} flops`;
+        : narrowed
+          ? `Calculate over the ${count} flops picked`
+          : `Calculate over all ${count} flops`;
       preflopButton.disabled = chrome.preflopRunning;
       preflopButton.title = cheap
         ? "This one is quick, so it runs itself once the range stops moving."
@@ -470,7 +516,10 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
       );
     }
 
-    markEdges();
+    if (edgesAt !== revision()) {
+      edgesAt = revision();
+      markEdges();
+    }
   };
 
   return { element: panel, render };
@@ -677,6 +726,40 @@ function light(on: boolean): HTMLElement {
 
 function formatCombos(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+/** The steps of the staircase, as the panel last read them, and from when. */
+let steps: Float32Array = new Float32Array();
+let stepsAt = -1;
+
+/**
+ * The step at or below a share.
+ *
+ * Below the first step there is nothing to paint, so it stays where it is put
+ * and the cut comes out empty; that is the reader saying "none of it".
+ */
+function snapToStep(share: number): number {
+  if (steps.length === 0) return share;
+  let best = share;
+  for (const step of steps) {
+    if (step <= share + 1e-6) best = step;
+    else break;
+  }
+  return share < steps[0] ? share : best;
+}
+
+/** The staircase drawn on the track, one hairline per step. */
+function ticks(): string {
+  if (steps.length === 0 || steps.length > 120) return "none";
+  const marks: string[] = [];
+  for (const step of steps) {
+    const at = step * 100;
+    if (at >= 99.9) continue;
+    marks.push(
+      `transparent ${(at - 0.35).toFixed(2)}%, var(--line) ${(at - 0.35).toFixed(2)}%, var(--line) ${(at + 0.35).toFixed(2)}%, transparent ${(at + 0.35).toFixed(2)}%`,
+    );
+  }
+  return marks.length > 0 ? `linear-gradient(to right, ${marks.join(", ")})` : "none";
 }
 
 function button(label: string, title: string): HTMLButtonElement {
