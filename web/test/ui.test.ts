@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { boot, chrome, mutate, state, statDefs } from "../src/store";
 import { createMenuBar } from "../src/ui/menubar";
 import { imageName, rangeImage } from "../src/ui/rangeImage";
+import { saveAs } from "../src/ui/saveAs";
 import { createTopStrip } from "../src/ui/topStrip";
 import { createRangePanel } from "../src/ui/rangePanel";
 import { createBoardPanel } from "../src/ui/boardPanel";
@@ -165,17 +166,24 @@ describe("the range panel", () => {
     const cut = range.element.querySelector<HTMLInputElement>(".slider-cut")!;
     const top = range.element.querySelector<HTMLInputElement>(".slider-top")!;
 
+    // A handle lands on the nearest cell edge rather than on the round number
+    // it was dropped at: between two cells there is nothing to choose, and a
+    // handle that showed one thing and selected another was the reason a nudge
+    // could appear to do nothing.
     top.value = "40";
     top.dispatchEvent(new window.Event("input", { bubbles: true }));
     renderAll();
-    expect(chrome.window.high).toBe(40);
+    const landed = chrome.window.high;
+    expect(landed).toBeGreaterThan(39);
+    expect(landed).toBeLessThan(41);
+    expect(Number(top.value)).toBe(landed);
 
     // Dragging the lower handle past the upper one stops it at the upper one.
     cut.value = "70";
     cut.dispatchEvent(new window.Event("input", { bubbles: true }));
     renderAll();
-    expect(chrome.window.low).toBe(40);
-    expect(Number(cut.value)).toBe(40);
+    expect(chrome.window.low).toBe(landed);
+    expect(Number(cut.value)).toBe(landed);
     expect(state().players[state().active].combos).toBe(0);
 
     cut.value = "0";
@@ -351,7 +359,7 @@ describe("the range panel", () => {
     expect(opens()[0].title).toMatch(/UTG opens to 2 bb/);
     expect(opens()[0].classList.contains("active"), "the seat stays chosen").toBe(true);
     expect(loaded(), "and the range is the other solution").not.toBe(hundred);
-    expect(chrome.libraryChart?.id).toBe("mtt-80bb-open-utg");
+    expect(state().players[state().active].chart).toBe("mtt-80bb-open-utg");
     expect(state().players[state().active].percent).toBeGreaterThan(16);
 
     // Twenty blinds is a complete depth: the opens, the defences, and the limp
@@ -408,7 +416,7 @@ describe("the range panel", () => {
 
     // The switch is about what a chart is, so the one already loaded changed
     // with it rather than waiting to be asked for again.
-    expect(chrome.libraryChart?.id).toBe(opens()[0].dataset.chart);
+    expect(state().players[state().active].chart).toBe(opens()[0].dataset.chart);
     expect(opens()[0].classList.contains("active")).toBe(true);
     expect(opens()[0].title).toMatch(/less the 0-EV ones/);
 
@@ -523,6 +531,63 @@ describe("the range as a picture", () => {
     );
     expect(button).toBeDefined();
     expect(button!.title).toBe("Image (Ctrl+P)");
+  });
+
+  test("a browser with no save dialog gets one, with the name filled in", async () => {
+    // jsdom has no showSaveFilePicker, which is Firefox's position too: without
+    // the stand-in, the file lands in the downloads folder unasked.
+    const saving = saveAs("{}", "kongzilla-2026-01-01.json", {
+      description: "Kongzilla session",
+      mime: "application/json",
+      extension: ".json",
+    });
+    const field = document.querySelector<HTMLInputElement>(".save-sheet .save-name")!;
+    expect(field.value).toBe("kongzilla-2026-01-01.json");
+    // Typing replaces the name and leaves the extension alone.
+    expect([field.selectionStart, field.selectionEnd]).toEqual([0, "kongzilla-2026-01-01".length]);
+
+    let saved = "";
+    URL.createObjectURL = () => "blob:stub";
+    URL.revokeObjectURL = () => {};
+    const anchor = document.createElement("a");
+    anchor.click = () => {
+      saved = anchor.download;
+    };
+    const create = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation((tag: string) =>
+      tag === "a" ? anchor : create(tag),
+    );
+    field.value = "utg-open";
+    document.querySelector<HTMLFormElement>(".save-sheet")!.requestSubmit();
+    await expect(saving).resolves.toBe(true);
+    // The extension they were never asked to type is put back.
+    expect(saved).toBe("utg-open.json");
+    expect(document.querySelector(".save-sheet")).toBeNull();
+    vi.restoreAllMocks();
+  });
+
+  test("backing out of that dialog saves nothing", async () => {
+    const saving = saveAs("{}", "kongzilla.json", {
+      description: "Kongzilla session",
+      mime: "application/json",
+      extension: ".json",
+    });
+    // The app's own Escape listener sits on the window and works from inside a
+    // field, so it has to not hear this one - otherwise backing out of the
+    // dialog also shuts whatever was open behind it.
+    let heard = false;
+    const listener = () => {
+      heard = true;
+    };
+    window.addEventListener("keydown", listener);
+    const sheet = document.querySelector<HTMLElement>(".save-sheet")!;
+    sheet
+      .querySelector<HTMLInputElement>(".save-name")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    window.removeEventListener("keydown", listener);
+    await expect(saving).resolves.toBe(false);
+    expect(document.querySelector(".save-sheet")).toBeNull();
+    expect(heard).toBe(false);
   });
 
   test("a browser with no canvas says so rather than saving nothing", async () => {
@@ -815,7 +880,15 @@ describe("the statistics panel", () => {
     // actually decides whether continuing is right.
     expect(readout.textContent).toMatch(/^\d+% · \d+%\+ eq$/);
     expect(chrome.cut).not.toBeNull();
-    expect(chrome.cut!.covered).toBeGreaterThanOrEqual(0.5);
+
+    // Equity across a range is a staircase, so the slider stops on the step at
+    // or below where it was dropped - here a third of a percent under the half
+    // it was asked for. What it stops on is what gets painted: the two agree,
+    // which is the whole point of stopping there.
+    const stopped = Number(slider.value) / 100;
+    expect(stopped).toBeLessThanOrEqual(0.5);
+    expect(stopped).toBeGreaterThan(0.45);
+    expect(chrome.cut!.covered).toBeCloseTo(stopped, 6);
 
     // It paints. It does not narrow: the matrix only moves on a street filter.
     expect(state().filtersEnabled).toBe(false);
@@ -914,6 +987,7 @@ describe("the statistics panel", () => {
 
     // Two headings, each naming its own game - a raked cash range and a chip-EV
     // range at the same depth are different answers, not two depths of one.
+    // The cash heading carries three: two raked stakes and the rakeless one.
     expect(mtt().querySelector(".library-label")!.textContent).toBe("MTT chip-EV");
     expect(cash().querySelector(".library-label")!.textContent).toMatch(/cash/);
     expect(stack(mtt(), "NL25")).toBeUndefined();
@@ -925,18 +999,24 @@ describe("the statistics panel", () => {
 
     // Its one depth is still a chip, because a chip is a button and reads as
     // one - it just does not stretch across the row.
+    expect(
+      Array.from(cash().querySelectorAll<HTMLButtonElement>(".stack-chip")).map(
+        (chip) => chip.textContent,
+      ),
+    ).toEqual(["NL10", "NL25", "cEV"]);
     stack(cash(), "NL25")!.click();
     renderAll();
     expect(cash().classList.contains("open")).toBe(true);
     expect(mtt().classList.contains("open")).toBe(false);
 
-    // Six-handed: no UTG1, no LJ, and no SB limp for the BB to isolate.
+    // Six-handed: no UTG1 and no LJ. The small blind limps in a cash game, so
+    // the big blind has an isolate to go with its defences.
     const seats = (row: string) =>
       Array.from(cash().querySelectorAll<HTMLButtonElement>(`.action-${row} .seat-chip`)).map(
         (chip) => chip.textContent,
       );
     expect(seats("open")).toEqual(["UTG", "HJ", "CO", "BTN", "SB"]);
-    expect(seats("defend")).toEqual(["UTG", "HJ", "CO", "BTN", "SB"]);
+    expect(seats("defend")).toEqual(["UTG", "HJ", "CO", "BTN", "SB", "SB limp"]);
     // And the MTT block keeps its seats to itself while the cash one is open.
     expect(mtt().querySelectorAll(".action-open .seat-chip")).toHaveLength(0);
 
@@ -984,10 +1064,15 @@ describe("the statistics panel", () => {
     // The tooltip and the range agree about what was loaded.
     expect(sb40.title).toContain(`${at40.toFixed(1)}% of hands`);
 
-    // Editing the range by hand puts the light out.
+    // Editing the range by hand keeps the light on and marks it: the reader is
+    // still reading the small blind at forty blinds, just not the solver's
+    // answer to it.
     setRange("22+");
     renderAll();
-    expect(sb40.classList.contains("active")).toBe(false);
+    expect(sb40.classList.contains("active")).toBe(true);
+    expect(sb40.classList.contains("edited")).toBe(true);
+    expect(stack("40bb").classList.contains("edited")).toBe(true);
+    expect(stack("100bb").classList.contains("edited")).toBe(false);
 
     stack("100bb").click();
     renderAll();
@@ -1457,6 +1542,32 @@ describe("the keyboard", () => {
     mutate((engine) => engine.setColour(colour));
   });
 
+  test("the title bar names the sheet, and understates the written pages", () => {
+    const bar = document.querySelector<HTMLElement>(".menubar")!;
+    const labels = Array.from(bar.querySelectorAll<HTMLElement>(".btn")).map(
+      (button) => button.textContent,
+    );
+    // The key sheet is a thing a reader goes looking for, so it says its name.
+    expect(labels).toContain("Hotkeys");
+    // The written pages are for search engines rather than for somebody
+    // mid-hand. The link stays, so they are findable; the label does not
+    // promise help it has none of, and does not say what it is for either.
+    const pages = bar.querySelector<HTMLAnchorElement>('a[href="/guide/"]')!;
+    expect(pages.textContent).toBe("Notes");
+    expect(pages.textContent).not.toMatch(/guide|help|learn|seo/i);
+  });
+
+  test("the sheet names the keys and nothing else", () => {
+    const sheet = createHotkeySheet();
+    document.body.append(sheet.element);
+    sheet.toggle();
+    // The sheet is a list of what the keys do here. Where another program put
+    // the same command is not something a reader of this one needs told.
+    expect(sheet.element.textContent).not.toMatch(/Flopzilla/i);
+    expect(sheet.element.querySelectorAll(".sheet-row").length).toBeGreaterThan(10);
+    sheet.element.remove();
+  });
+
   test("Flopzilla's own keys do what they do there", () => {
     const restore = onBoard("Kh 7h 2c");
     setRange("22+, A2s+, KJs+, AJo+");
@@ -1693,9 +1804,16 @@ describe("the preflop mode", () => {
     expect(state().board).toBe("");
     expect(stats.element.classList.contains("preflop-mode")).toBe(true);
 
-    // Earlier tests left two dead cards; clear them so every flop is available.
+    // Earlier tests left two dead cards and a seat holding a hand. Both take
+    // cards out of the deck, so both have to go before every flop is available
+    // again - a dealt hand blocks a flop exactly as a dead card does.
     for (const card of [...state().dead]) pickCard(strip, card);
     expect(state().dead).toHaveLength(0);
+    for (let seat = state().players.length - 1; seat >= 0; seat -= 1) {
+      if (state().players[seat].hand !== null) mutate((engine) => engine.removeSeat(seat));
+    }
+    renderAll();
+    expect(state().dealt).toHaveLength(0);
 
     // One combo keeps the pass over 22,100 flops quick.
     setRange("AhKh");

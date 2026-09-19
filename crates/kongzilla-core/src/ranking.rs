@@ -5,7 +5,7 @@ use crate::ranking_table;
 
 /// The orderings the slider can use.
 ///
-/// Only one ships today; the enum exists so adding Sklansky-Chubukov or a
+/// Two ship today; the enum exists so adding Sklansky-Chubukov or a
 /// user-supplied chart later does not change any call site.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum Ranking {
@@ -13,18 +13,26 @@ pub enum Ranking {
     ///
     /// Ranks pocket pairs very highly, because all-in equity is all this metric
     /// knows; it says nothing about how a hand plays once there is betting.
-    #[default]
     EquityVsRandom,
     /// Bill Chen's scoring formula.
     ///
     /// A playability heuristic rather than an equity measure: it pays for high
     /// cards, adds two points for suitedness and subtracts for gaps, so suited
     /// connectors climb and small pairs fall.
+    ///
+    /// The default, because "top 15%" is a thing people say about opening
+    /// ranges, and the ranges they mean look like this one: 76s inside it and
+    /// 22 outside. All-in equity answers a different question - one worth
+    /// asking, but not the one the slider is usually asked.
+    #[default]
     ChenFormula,
 }
 
 impl Ranking {
     /// Every ordering, for populating a dropdown.
+    ///
+    /// The order is part of the link format - a saved session names its
+    /// ranking by position here - so entries are appended, never moved.
     pub const ALL: [Ranking; 2] = [Ranking::EquityVsRandom, Ranking::ChenFormula];
 
     /// A stable identifier for serialisation.
@@ -175,6 +183,15 @@ mod tests {
         // Suited connectors climb under Chen and small pairs fall.
         assert!(chen("65s") < chen("22"));
         assert!(equity("65s") > equity("22"));
+    }
+
+    #[test]
+    fn the_slider_reaches_for_chen_first() {
+        assert_eq!(Ranking::default(), Ranking::ChenFormula);
+        // A link written before the default moved still opens on the ordering
+        // it was written with, because it names it by position rather than
+        // leaning on whatever the default happens to be.
+        assert_eq!(Ranking::ALL[0], Ranking::EquityVsRandom);
     }
 
     #[test]

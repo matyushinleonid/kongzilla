@@ -20,6 +20,7 @@ fn main() {
         let result = over_flops(
             &range,
             CardSet::EMPTY,
+            CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,
             FlopFilter::EVERYTHING,

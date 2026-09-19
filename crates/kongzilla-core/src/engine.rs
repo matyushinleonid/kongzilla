@@ -23,7 +23,7 @@ use crate::preflop::{self, PreflopBreakdown};
 use crate::range::{Preset, Range};
 use crate::ranking::Ranking;
 use crate::rng::Rng;
-use crate::stats::{ClassifyOptions, ComboStats, StatBlock, StatId, StatMask};
+use crate::stats::{stat_count, ClassifyOptions, ComboStats, StatBlock, StatId, StatMask};
 
 /// One seat: a range and the filters applied to it.
 #[derive(Clone, Debug)]
@@ -51,6 +51,48 @@ pub struct Player {
     pub streets: [Option<StreetFilter>; 3],
     /// The strongest slice of the range, taken by equity. See [`Cut`].
     pub cut: Option<Cut>,
+    /// Where the range slider's handles sit. See [`Slider`].
+    pub slider: Slider,
+    /// The library chart this seat was loaded from, if it was.
+    ///
+    /// Kept after the range has been edited, rather than forgotten: a reader
+    /// who takes the top off a defending chart is still reading that spot, and
+    /// the panel says so - the chart is still named, marked as no longer the
+    /// chart as it ships.
+    pub from_library: Option<FromLibrary>,
+}
+
+/// A chart a seat was loaded from, and the range it arrived as.
+#[derive(Clone, Debug)]
+pub struct FromLibrary {
+    /// Which chart, by [`library::Chart::id`].
+    pub id: String,
+    /// What it put in the matrix, for telling an edit from the chart itself.
+    pub pristine: Range,
+}
+
+/// What the range slider is cutting, and where its two handles sit.
+///
+/// Both handles are percentages of the whole deck: nought is no hands and a
+/// hundred is every hand there is, whatever the matrix holds. That is what lets
+/// the slider widen a range as well as narrow it.
+///
+/// What the matrix changes is the *order* they cut in. A range that arrived
+/// some other way - a chart, a painted matrix, a restored link - puts its own
+/// cells at the head of the ordering, so it is exactly the band from nought to
+/// its own width and the handles park there. See [`Range::window_of`].
+///
+/// The base is remembered rather than worked out afresh each time, so dragging
+/// a handle back brings the chart back whole instead of leaving the reader with
+/// whatever their last drag happened to spare.
+#[derive(Clone, Debug, Default)]
+pub struct Slider {
+    /// The range whose ordering the handles cut. Empty means the plain ranking.
+    pub base: Range,
+    /// Where the band starts, as a percentage of the deck.
+    pub low: f64,
+    /// Where it ends.
+    pub high: f64,
 }
 
 /// One combination of one matrix cell, as the cell draws it.
@@ -125,6 +167,8 @@ impl Player {
             groups: GroupSet::new(),
             painted: false,
             streets: [None, None, None],
+            slider: Slider::default(),
+            from_library: None,
         }
     }
 
@@ -140,6 +184,8 @@ impl Player {
             groups: GroupSet::new(),
             painted: true,
             streets: [None, None, None],
+            slider: Slider::default(),
+            from_library: None,
         }
     }
 
@@ -208,6 +254,14 @@ pub struct Session {
     /// was over, so two seats holding the same range share one entry, and it is
     /// capped: a pass is large, and nobody compares seven of them.
     preflop_cache: RefCell<Vec<(u64, PreflopBreakdown)>>,
+    /// Per-hand equity before the flop, filed by the pair of ranges it is
+    /// between rather than by the seat that asked for it.
+    ///
+    /// A pass works out both directions, because the graph draws both curves -
+    /// and the other seat's question *is* the other direction. Filed by seat it
+    /// would be asked again the moment the reader looked from the other side;
+    /// filed by pair, switching seats finds the answer already there.
+    preflop_equity: RefCell<Vec<(u64, ComboEquity)>>,
     /// What share of each colour a street filter lets through, `0..=1`.
     ///
     /// One per palette colour, unpainted first. Painting says which hands the
@@ -256,6 +310,7 @@ impl Session {
             compare: None,
             versus: None,
             preflop_cache: RefCell::new(Vec::new()),
+            preflop_equity: RefCell::new(Vec::new()),
             colour_shares: [1.0; crate::groups::COLOURS + 1],
             equity_cache: RefCell::new(EquityCache::default()),
             board,
@@ -518,6 +573,14 @@ impl Session {
     /// Chooses the ordering used by the range slider.
     pub fn set_ranking(&mut self, ranking: Ranking) {
         self.ranking = ranking;
+        // Where a handle sits is a statement about an ordering, so it has to be
+        // made again about the new one.
+        let was = self.active;
+        for seat in 0..self.players.len() {
+            self.active = seat;
+            self.park_slider();
+        }
+        self.active = was;
     }
 
     /// Replaces the active range with the top `percent` of hands.
@@ -527,6 +590,8 @@ impl Session {
         }
         let ranking = self.ranking;
         self.active_mut().range = Range::top_percent(percent, ranking);
+        self.park_slider();
+        self.apply_default_groups(Because::TheRangeChanged);
     }
 
     /// Replaces the active range with the band between the slider handles.
@@ -534,9 +599,46 @@ impl Session {
         if !self.editable() {
             return;
         }
+        let (low, high) = if from <= to { (from, to) } else { (to, from) };
         let ranking = self.ranking;
-        self.active_mut().range = Range::window(from, to, ranking);
+        let base = self.active().slider.base.clone();
+        self.active_mut().slider.low = low;
+        self.active_mut().slider.high = high;
+        self.active_mut().range = base.window_of(low, high, ranking);
         self.apply_default_groups(Because::TheRangeChanged);
+    }
+
+    /// What the slider is cutting, and where its handles sit.
+    pub fn slider(&self) -> &Slider {
+        &self.active().slider
+    }
+
+    /// Points the slider at what the matrix now holds, handles parked on it.
+    ///
+    /// Called by every way of setting a range except the slider itself: the one
+    /// range the handles must not be re-pointed at is the one they just made,
+    /// or dragging one back would never return what it took away.
+    fn park_slider(&mut self) {
+        let range = self.active().range.clone();
+        // Exactly the width, not rounded to anything: it is a stop by
+        // construction - the edge of the last cell the range holds - and
+        // rounding would move the handle off the one place where it selects
+        // what the matrix already has.
+        let high = range.cell_percent();
+        self.active_mut().slider = Slider {
+            base: range,
+            low: 0.0,
+            high,
+        };
+    }
+
+    /// Where the slider's handles have somewhere to stop.
+    ///
+    /// The edges of the cells, in the order the slider walks them, as
+    /// percentages. Between two of them there is nothing to choose, so this is
+    /// what the handles snap to.
+    pub fn slider_stops(&self) -> Vec<f32> {
+        self.active().slider.base.slider_stops(self.ranking)
     }
 
     /// Removes the top `percent` of hands from the active range.
@@ -544,6 +646,7 @@ impl Session {
         let ranking = self.ranking;
         let range = self.active().range.without_top_percent(percent, ranking);
         self.active_mut().range = range;
+        self.park_slider();
     }
 
     /// Replaces the active range from text.
@@ -553,6 +656,7 @@ impl Session {
         }
         let range = Range::parse(text)?;
         self.active_mut().range = range;
+        self.park_slider();
         self.apply_default_groups(Because::TheRangeChanged);
         Ok(())
     }
@@ -560,6 +664,7 @@ impl Session {
     /// Sets one matrix cell on the active range.
     pub fn set_active_class(&mut self, class: HandClass, weight: f32) {
         self.active_mut().range.set_class(class, weight);
+        self.park_slider();
         self.apply_default_groups(Because::TheRangeChanged);
     }
 
@@ -585,7 +690,7 @@ impl Session {
     pub fn cell_combos(&self, class: HandClass, within: Option<StatId>) -> Vec<CellCombo> {
         let range = &self.active().range;
         let narrowed = self.narrowed();
-        let blocked = self.board.mask().union(self.dead);
+        let blocked = self.dealt_elsewhere(self.active);
         class
             .combos()
             .map(|combo| CellCombo {
@@ -605,6 +710,7 @@ impl Session {
             return;
         }
         self.active_mut().range.set(combo, weight);
+        self.park_slider();
         self.apply_default_groups(Because::TheRangeChanged);
     }
 
@@ -630,7 +736,12 @@ impl Session {
         };
         match library::chart_by_id(id).and_then(built) {
             Some(range) => {
+                self.active_mut().from_library = Some(FromLibrary {
+                    id: id.to_string(),
+                    pristine: range.clone(),
+                });
                 self.active_mut().range = range;
+                self.park_slider();
                 self.apply_default_groups(Because::TheRangeChanged);
                 true
             }
@@ -638,10 +749,29 @@ impl Session {
         }
     }
 
+    /// Which library chart the active seat was loaded from.
+    pub fn from_library(&self) -> Option<&FromLibrary> {
+        self.active().from_library.as_ref()
+    }
+
+    /// Whether the active range is no longer the chart it was loaded from.
+    ///
+    /// A cell painted, a handle dragged, a line typed - anything that leaves
+    /// the matrix holding something other than what the chart shipped. The
+    /// panel says so rather than letting go of the chart: the reader is still
+    /// looking at that spot, just not at the solver's answer to it.
+    pub fn library_edited(&self) -> bool {
+        self.active()
+            .from_library
+            .as_ref()
+            .is_some_and(|chart| chart.pristine != self.active().range)
+    }
+
     /// Adds everything a quick button selects to the active range.
     pub fn add_preset(&mut self, preset: Preset) {
         let merged = self.active().range.union(&Range::preset(preset));
         self.active_mut().range = merged;
+        self.park_slider();
         self.apply_default_groups(Because::TheRangeChanged);
     }
 
@@ -651,6 +781,10 @@ impl Session {
             return;
         }
         self.active_mut().range = Range::empty();
+        // Clearing is starting again rather than editing, so the chart the seat
+        // came from goes with it.
+        self.active_mut().from_library = None;
+        self.park_slider();
         self.apply_default_groups(Because::TheRangeChanged);
     }
 
@@ -879,7 +1013,7 @@ impl Session {
     /// painted in by hand.
     pub fn class_suits(&self) -> [Vec<u8>; NUM_CLASSES] {
         let narrowed = self.narrowed();
-        let blocked = self.board.mask().union(self.dead);
+        let blocked = self.dealt_elsewhere(self.active);
         std::array::from_fn(|index| {
             let class = HandClass::from_index(index as u8);
             if !class.is_suited() {
@@ -994,7 +1128,7 @@ impl Session {
         self.active()
             .groups
             .painted_at_weights(&self.active().range, &self.cache, &self.colour_shares)
-            .combo_count_excluding(self.board.mask().union(self.dead))
+            .combo_count_excluding(self.dealt_elsewhere(self.active))
     }
 
     /// What share of a colour a street filter lets through.
@@ -1052,7 +1186,7 @@ impl Session {
             };
             range = range.intersection(&set);
         }
-        range.combo_count_excluding(self.board.mask().union(self.dead))
+        range.combo_count_excluding(self.dealt_elsewhere(self.active))
     }
 
     /// What one of the active seat's street filters currently keeps.
@@ -1108,6 +1242,61 @@ impl Session {
     /// a second kind of narrowing: it decides which hands carry a colour, and
     /// the matrix moves only when a street's filter is pressed. Returns `None`
     /// before the flop, where per-combo equity is sampled and far too noisy.
+    /// Where the top-of-the-range slider has anywhere to stop.
+    ///
+    /// Equity across a range is a staircase, not a ramp: sorted strongest
+    /// first, it holds a value over a run of hands and then drops. Between two
+    /// steps there is nothing to choose - the same hands are painted either
+    /// way - so the places worth stopping are the edges of the steps, returned
+    /// here as the share of the range covered at each.
+    ///
+    /// The edges are where the equity *changes*, not where one more combination
+    /// fits: half of a pair of aces is not a decision anyone makes, and the six
+    /// of them share a value. Empty before a flop, where there is no equity to
+    /// sort by and the slider has nothing to offer.
+    pub fn equity_steps(&self) -> Vec<f32> {
+        let villain = self.opponent_range().unwrap_or_else(Range::full);
+        let mine = self.active().range.clone();
+        let blocked = self.blocked_for_equity();
+        let Some(equity) = equity::equity_by_combo(&mine, &villain, &self.board, blocked) else {
+            return Vec::new();
+        };
+        let mut ordered: Vec<(f32, f32)> = Vec::new();
+        let mut total = 0.0f64;
+        for combo in self.cache.live().iter() {
+            let weight = mine.get(combo);
+            let value = equity.equity[combo.index() as usize];
+            if weight <= 0.0 || value < 0.0 {
+                continue;
+            }
+            ordered.push((value, weight));
+            total += f64::from(weight);
+        }
+        if total <= 0.0 {
+            return Vec::new();
+        }
+        ordered.sort_by(|a, b| b.0.total_cmp(&a.0));
+
+        let mut steps = Vec::new();
+        let mut covered = 0.0f64;
+        let mut at = 0;
+        while at < ordered.len() {
+            let value = ordered[at].0;
+            while at < ordered.len() && ordered[at].0 == value {
+                covered += f64::from(ordered[at].1);
+                at += 1;
+            }
+            steps.push((covered / total) as f32);
+        }
+        steps
+    }
+
+    /// Paints the strongest `share` of the active range, by equity on this board.
+    ///
+    /// This is the slider talking to the same markers everything else uses, not
+    /// a second kind of narrowing: it decides which hands carry a colour, and
+    /// the matrix moves only when a street's filter is pressed. Returns `None`
+    /// before the flop, where per-combo equity is sampled and far too noisy.
     pub fn set_continue_by_equity(&mut self, share: f64) -> Option<Cut> {
         if !self.editable() {
             return None;
@@ -1127,14 +1316,17 @@ impl Session {
         }
         let villain = self.opponent_range().unwrap_or_else(Range::full);
         let mine = self.active().range.clone();
-        let Some(equity) = equity::equity_by_combo(&mine, &villain, &self.board, self.dead) else {
+        let blocked = self.blocked_for_equity();
+        let Some(equity) = equity::equity_by_combo(&mine, &villain, &self.board, blocked) else {
             self.active_mut().groups = restore;
             return None;
         };
 
-        // Strongest first, and take whole combos: a combo is the smallest thing
-        // worth continuing with, so the slice lands just past the target rather
-        // than splitting one in half.
+        // Strongest first, and take whole steps of the staircase: hands worth
+        // the same are taken together or not at all. Three of a pair of aces is
+        // not a decision anybody makes - it is an artefact of where a target
+        // happened to land - so the slice runs to the end of the run it is in
+        // rather than stopping inside it.
         let mut ordered: Vec<(Combo, f32, f32)> = Vec::new();
         let mut total = 0.0f64;
         for (combo, weight) in self.cache.live().iter().map(|c| (c, mine.get(c))) {
@@ -1155,13 +1347,22 @@ impl Session {
         let mut range = Range::empty();
         let mut covered = 0.0f64;
         let mut threshold = 1.0f32;
-        for (combo, value, weight) in &ordered {
-            if covered >= target {
-                break;
+        // A hair under the target still counts as reaching it. The share
+        // arrives from a slider that snapped to a step, and the step came back
+        // through a float on the way: without this the sum lands a
+        // ten-millionth short of its own boundary and the slice takes a whole
+        // extra run of hands, so the panel disagreed with the slider.
+        let reached = target - total * 1e-6;
+        let mut at = 0;
+        while at < ordered.len() && covered < reached {
+            let value = ordered[at].1;
+            while at < ordered.len() && ordered[at].1 == value {
+                let (combo, _, weight) = ordered[at];
+                range.set(combo, weight);
+                covered += f64::from(weight);
+                at += 1;
             }
-            range.set(*combo, *weight);
-            covered += f64::from(*weight);
-            threshold = *value;
+            threshold = value;
         }
 
         // The slider paints; it does not narrow. The top of the range gets the
@@ -1243,6 +1444,54 @@ impl Session {
             .collect()
     }
 
+    /// What the hands of one cell make, as a share of the cell for each
+    /// statistic.
+    ///
+    /// The other way round from [`Self::highlight`], which takes a statistic
+    /// and says which cells are about it. This takes a cell and says which
+    /// statistics it is about - the question a reader asks by pointing at a
+    /// hand rather than at a row.
+    ///
+    /// Over the combinations the board and the dead cards leave, and not over
+    /// the range: the question is what the hand makes here, which has an answer
+    /// whether or not the reader holds it. A cell every card of which is gone
+    /// makes nothing, and says so with an empty list.
+    pub fn class_stats(&self, class: HandClass) -> Vec<f32> {
+        let gone = self
+            .board
+            .mask()
+            .union(self.dead)
+            .union(self.dealt_elsewhere(self.active));
+        self.share_of(
+            class
+                .combos()
+                .filter(|combo| !combo.mask().intersects(gone)),
+        )
+    }
+
+    /// The same for one combination, where every share is nought or one.
+    pub fn combo_stats(&self, combo: Combo) -> Vec<f32> {
+        self.share_of(std::iter::once(combo))
+    }
+
+    fn share_of(&self, combos: impl Iterator<Item = Combo>) -> Vec<f32> {
+        let mut counts = vec![0f32; stat_count()];
+        let mut seen = 0f32;
+        for combo in combos {
+            seen += 1.0;
+            for stat in self.cache.mask(combo).iter() {
+                counts[stat.index() as usize] += 1.0;
+            }
+        }
+        if seen == 0.0 {
+            return Vec::new();
+        }
+        for count in &mut counts {
+            *count /= seen;
+        }
+        counts
+    }
+
     /// Unpaints everything on the active seat and lifts every street filter.
     pub fn clear_filters(&mut self) {
         self.active_mut().groups.clear();
@@ -1307,6 +1556,17 @@ impl Session {
             }
         }
         blocked
+    }
+
+    /// Every card the board can no longer use.
+    ///
+    /// The dead cards and every hand dealt at the table, the reader's own
+    /// included: a flop cannot contain a card somebody is already holding. The
+    /// counting, the sampling and the pass over the flops all ask this rather
+    /// than asking for the dead cards, which was how dealing yourself a hand
+    /// left the panel still counting all 22,100.
+    pub fn off_the_deck(&self) -> CardSet {
+        self.dead.union(self.dealt_hands())
     }
 
     /// Every card a seat has been dealt, for the card grids to grey out.
@@ -1437,7 +1697,7 @@ impl Session {
 
     /// How many flops a pass would look at, after the dead cards.
     pub fn flop_filter_count(&self) -> u64 {
-        self.flop_filter.count(self.dead)
+        self.flop_filter.count(self.off_the_deck())
     }
 
     /// How often each statistic comes with each other one.
@@ -1451,24 +1711,31 @@ impl Session {
     /// millions of classifications - so it is run on request rather than on every
     /// keystroke, which is also how Flopzilla does it.
     pub fn preflop(&self) -> PreflopBreakdown {
-        if let Some(result) = self.preflop_cached() {
-            return result;
-        }
-        let result = preflop::over_flops(
-            &self.active().range,
-            self.dead,
-            self.options,
-            self.checkmarks,
-            self.flop_filter,
-        );
         let key = self.preflop_key();
+        let standing = self.preflop_cached();
+        let breakdown = standing.clone().unwrap_or_else(|| {
+            preflop::over_flops(
+                &self.active().range,
+                self.off_the_deck(),
+                self.dealt_elsewhere(self.active),
+                self.options,
+                self.checkmarks,
+                self.flop_filter,
+            )
+        });
+
+        // The equity views ask the same question of the same flops - what is a
+        // hand worth, given a board out of this set - so they are answered here
+        // rather than behind a second button and a second wait.
+        self.work_out_preflop_equity();
+
         let mut cache = self.preflop_cache.borrow_mut();
         cache.retain(|(cached, _)| *cached != key);
         if cache.len() >= Self::MAX_SEATS {
             cache.remove(0);
         }
-        cache.push((key, result.clone()));
-        result
+        cache.push((key, breakdown.clone()));
+        breakdown
     }
 
     /// The pass for the seat as it stands, if one has already been run.
@@ -1478,11 +1745,102 @@ impl Session {
     pub fn preflop_cached(&self) -> Option<PreflopBreakdown> {
         let key = self.preflop_key();
         let cache = self.preflop_cache.borrow();
-        let (_, result) = cache.iter().find(|(cached, _)| *cached == key)?;
+        let (_, breakdown) = cache.iter().find(|(cached, _)| *cached == key)?;
         // The checkmarks may have moved since; the shape has not.
-        let mut result = result.clone();
+        let mut result = breakdown.clone();
         result.hit = result.hit_for(self.checkmarks);
         Some(result)
+    }
+
+    /// Everything neither side of a per-hand equity calculation can hold.
+    ///
+    /// The board, the dead cards, and any hand dealt at a seat that is not one
+    /// of the two. Not the two sides' own hands: a dealt hand *is* the range on
+    /// that side, and a range that crossed its own cards out would have nothing
+    /// left to measure - which is why the equity views went blank against a
+    /// dealt hand. The removal between the two sides is done combination by
+    /// combination inside the calculation, which is more exact than crossing
+    /// cards out in advance.
+    fn blocked_for_equity(&self) -> CardSet {
+        let versus = self.versus_seat().filter(|seat| *seat != self.active);
+        let mut blocked = self.board.mask().union(self.dead);
+        for (index, player) in self.players.iter().enumerate() {
+            // With nobody singled out, the opponent is every other seat, so
+            // there is no third party left to block.
+            let inside = index == self.active || versus.is_none_or(|seat| seat == index);
+            if inside {
+                continue;
+            }
+            if let Some(hand) = player.hand {
+                blocked = blocked.union(hand.mask());
+            }
+        }
+        blocked
+    }
+
+    /// The preflop equity of one range against another, if it has been worked
+    /// out and still says something about the ranges as they are.
+    fn preflop_equity_for(&self, hero: &Range, villain: &Range) -> Option<ComboEquity> {
+        let wanted = self.preflop_equity_key(hero, villain);
+        let cache = self.preflop_equity.borrow();
+        let (_, equity) = cache.iter().find(|(cached, _)| *cached == wanted)?;
+        Some(equity.clone())
+    }
+
+    /// What one direction of a preflop equity pass is about: the two ranges,
+    /// the dead cards and the flops it was over.
+    ///
+    /// The pair rather than the seat, so that looking at the same two ranges
+    /// from the other side finds the answer that is already there.
+    fn preflop_equity_key(&self, hero: &Range, villain: &Range) -> u64 {
+        self.fingerprint(&[hero, villain], 9)
+            ^ self.blocked_for_equity().bits()
+            ^ self
+                .flop_filter
+                .bits()
+                .iter()
+                .fold(0u64, |hash, axis| hash << 8 | u64::from(*axis))
+    }
+
+    /// Files one direction of a pass.
+    fn keep_preflop_equity(&self, hero: &Range, villain: &Range, value: ComboEquity) {
+        let key = self.preflop_equity_key(hero, villain);
+        let mut cache = self.preflop_equity.borrow_mut();
+        cache.retain(|(cached, _)| *cached != key);
+        // Both directions of a few pairs, and no more: each is a megabyte of
+        // nothing once the reader has moved on.
+        if cache.len() >= 2 * Self::MAX_SEATS {
+            cache.remove(0);
+        }
+        cache.push((key, value));
+    }
+
+    /// Runs the per-hand equity over the flops the ticks leave.
+    ///
+    /// Both directions, because the graph draws both curves - and because the
+    /// other seat's question is this one backwards, so filing both is what
+    /// lets switching seats find the answer already worked out.
+    fn work_out_preflop_equity(&self) {
+        if !self.board.is_empty() {
+            return;
+        }
+        let mine = self.effective_range();
+        let villain = self.opponent_range().unwrap_or_default();
+        if mine.is_empty() || villain.is_empty() {
+            return;
+        }
+        let dead = self.blocked_for_equity();
+        let filter = self.flop_filter;
+        if self.preflop_equity_for(&mine, &villain).is_none() {
+            if let Some(ours) = equity::equity_by_combo_preflop(&mine, &villain, dead, filter) {
+                self.keep_preflop_equity(&mine, &villain, ours);
+            }
+        }
+        if self.preflop_equity_for(&villain, &mine).is_none() {
+            if let Some(theirs) = equity::equity_by_combo_preflop(&villain, &mine, dead, filter) {
+                self.keep_preflop_equity(&villain, &mine, theirs);
+            }
+        }
     }
 
     /// The headline of the last pass, re-read for the checkmarks as they stand.
@@ -1492,15 +1850,15 @@ impl Session {
     pub fn preflop_hit(&self) -> Option<f64> {
         let key = self.preflop_key();
         let cache = self.preflop_cache.borrow();
-        let (_, result) = cache.iter().find(|(cached, _)| *cached == key)?;
-        Some(result.hit_for(self.checkmarks))
+        let (_, breakdown) = cache.iter().find(|(cached, _)| *cached == key)?;
+        Some(breakdown.hit_for(self.checkmarks))
     }
 
     /// What a pass over all the flops depends on. Not the checkmarks: those
     /// pick what to ask of the answer rather than changing it.
     fn preflop_key(&self) -> u64 {
         let mut hash = self.fingerprint(&[&self.active().range], 7);
-        hash ^= self.dead.bits();
+        hash ^= self.off_the_deck().bits();
         hash = hash.wrapping_mul(0x100_0000_01b3);
         hash ^= u64::from(self.options.one_card_backdoor_flushdraw);
         for bits in self.flop_filter.bits() {
@@ -1512,28 +1870,75 @@ impl Session {
 
     /// How often each kind of flop comes, given the dead cards and the ticks.
     pub fn flop_breakdown(&self) -> FlopBreakdown {
-        flops::filtered_breakdown(self.dead, self.flop_filter)
+        flops::filtered_breakdown(self.off_the_deck(), self.flop_filter)
     }
 
     /// Equity for each combo of the active range, for the equity matrix and graph.
+    ///
+    /// Preflop this is only ever the answer to a question the reader has asked:
+    /// there is no board to enumerate, the estimate costs about a second, and
+    /// everything here is read on every redraw. So before a flop it hands back
+    /// what the pass over the flops left and nothing else.
     pub fn equity_by_combo(&self) -> Option<ComboEquity> {
         let mine = self.effective_range();
         let villain = self.opponent_range().unwrap_or_default();
-        let key = self.fingerprint(&[&mine, &villain], 1);
-        let mut cache = self.equity_cache.borrow_mut();
-        if let Some(cached) = &cache.by_combo {
+        if self.board.is_empty() {
+            return self.preflop_equity_for(&mine, &villain);
+        }
+        let key = self.by_combo_key(&mine, &villain);
+        if let Some(cached) = &self.equity_cache.borrow().by_combo {
             if cached.key == key {
                 return cached.value.clone();
             }
         }
         let result = (!villain.is_empty())
-            .then(|| equity::equity_by_combo(&mine, &villain, &self.board, self.dead))
+            .then(|| {
+                equity::equity_by_combo(&mine, &villain, &self.board, self.blocked_for_equity())
+            })
             .flatten();
-        cache.by_combo = Some(Cached {
+        self.equity_cache.borrow_mut().by_combo = Some(Cached {
             key,
             value: result.clone(),
         });
         result
+    }
+
+    fn by_combo_key(&self, mine: &Range, villain: &Range) -> u64 {
+        self.fingerprint(&[mine, villain], 1) ^ self.dealt_hands().bits()
+    }
+
+    /// Whether a preflop equity pass is standing for what is on the table.
+    ///
+    /// Goes false by itself when either range or the ticked flops move, because
+    /// the answer was about what it was run on - the same promise the rest of
+    /// the pass makes.
+    pub fn preflop_equity_ready(&self) -> bool {
+        self.board.is_empty()
+            && self
+                .preflop_equity_for(
+                    &self.effective_range(),
+                    &self.opponent_range().unwrap_or_default(),
+                )
+                .is_some()
+    }
+
+    /// Whether the pass would have per-hand equity to work out as well.
+    ///
+    /// What it costs, too: the panel that decides whether to run a pass without
+    /// being asked has to know that this is riding along with it.
+    pub fn preflop_equity_work(&self) -> f64 {
+        if !self.board.is_empty() {
+            return 0.0;
+        }
+        let mine = self.effective_range();
+        let villain = self.opponent_range().unwrap_or_default();
+        if mine.is_empty() || villain.is_empty() {
+            return 0.0;
+        }
+        let dead = self.blocked_for_equity();
+        let boards = f64::from(equity::preflop_boards(&mine, &villain, dead));
+        // Both sides are worked out, and each board evaluates both ranges.
+        2.0 * boards * (mine.live(dead).len() + villain.live(dead).len()) as f64
     }
 
     /// Per-combo equity for the seat the active range is measured against.
@@ -1543,15 +1948,18 @@ impl Session {
     /// opponent - a lone range is measured against itself, and plotting that
     /// twice says nothing.
     pub fn opponent_equity_by_combo(&self) -> Option<ComboEquity> {
+        if self.board.is_empty() {
+            let villain = self.raw_opponent_range();
+            return self.preflop_equity_for(&villain, &self.effective_range());
+        }
         let key = self.fingerprint(&[&self.effective_range(), &self.raw_opponent_range()], 2);
-        let mut cache = self.equity_cache.borrow_mut();
-        if let Some(cached) = &cache.opponent {
+        if let Some(cached) = &self.equity_cache.borrow().opponent {
             if cached.key == key {
                 return cached.value.clone();
             }
         }
         let result = self.compute_opponent_equity();
-        cache.opponent = Some(Cached {
+        self.equity_cache.borrow_mut().opponent = Some(Cached {
             key,
             value: result.clone(),
         });
@@ -1563,7 +1971,12 @@ impl Session {
         if villain.is_empty() {
             return None;
         }
-        equity::equity_by_combo(&villain, &self.effective_range(), &self.board, self.dead)
+        equity::equity_by_combo(
+            &villain,
+            &self.effective_range(),
+            &self.board,
+            self.blocked_for_equity(),
+        )
     }
 
     /// Deals a random flop from the ones the ticked groups leave.
@@ -1575,7 +1988,9 @@ impl Session {
     /// Returns whether a flop was found; nothing is left when the dead cards
     /// and the ticks between them rule out every board.
     pub fn deal_flop(&mut self) -> bool {
-        let Some(flop) = flops::sample_matching(self.flop_filter, self.dead, &mut self.rng) else {
+        let Some(flop) =
+            flops::sample_matching(self.flop_filter, self.off_the_deck(), &mut self.rng)
+        else {
             return false;
         };
         self.board = flop;
@@ -1588,7 +2003,7 @@ impl Session {
     /// Returns whether a flop was found, which fails only for a bucket the dead
     /// cards have emptied or a key that names no bucket.
     pub fn deal_flop_from(&mut self, axis: &str, group: &str) -> bool {
-        let Some(flop) = flops::sample(axis, group, self.dead, &mut self.rng) else {
+        let Some(flop) = flops::sample(axis, group, self.off_the_deck(), &mut self.rng) else {
             return false;
         };
         self.board = flop;
@@ -1607,6 +2022,29 @@ impl Session {
         self.lone_combo_for(self.active)
     }
 
+    /// The hand the per-hand views are about, and the seat it is sitting at.
+    ///
+    /// The selected seat when it holds a hand; failing that the only hand at
+    /// the table, because dealing one no longer moves the reader onto it.
+    /// Several hands and nobody has said which, so neither does this.
+    fn hand_in_question(&self) -> Option<(usize, Combo)> {
+        if let Some(hand) = self.lone_combo() {
+            return Some((self.active, hand));
+        }
+        let mut hands = self
+            .players
+            .iter()
+            .enumerate()
+            .filter_map(|(seat, player)| player.hand.map(|hand| (seat, hand)));
+        let first = hands.next()?;
+        hands.next().is_none().then_some(first)
+    }
+
+    /// The only hand dealt at the table, if exactly one has been.
+    pub fn only_hand(&self) -> Option<Combo> {
+        self.hand_in_question().map(|(_, hand)| hand)
+    }
+
     /// The one hand a seat holds, if it holds exactly one.
     /// The known hand a seat holds, if it is a hand rather than a range.
     pub fn lone_combo_for(&self, seat: usize) -> Option<Combo> {
@@ -1615,16 +2053,22 @@ impl Session {
 
     /// How each remaining card would change the hand's equity.
     ///
-    /// The hand is the one the active seat holds when it holds exactly one, and
-    /// then the question is how the cards to come treat it against the range it
-    /// is up against. Failing that it is the pair in the dead-card slots, which
-    /// is Flopzilla's way in and is measured against the seat you are looking
-    /// at, because those two cards are nobody's seat.
+    /// The hand is the one the active seat holds, when it holds one. Failing
+    /// that it is the only hand at the table, wherever it is sitting: dealing
+    /// a hand no longer moves the reader onto it, so insisting they go there
+    /// first would mean a view that says "deal a hand" to somebody who just
+    /// did. Several hands is a question this cannot answer, and it says so by
+    /// answering nothing.
     pub fn hotness(&self) -> Option<Vec<HotCard>> {
-        let hand = self.lone_combo()?;
-        let villain = self.raw_opponent_range();
+        let (seat, hand) = self.hand_in_question()?;
+        // Measured against everyone but the seat the hand is sitting at. Not
+        // everyone but the *selected* seat: with the reader on their range and
+        // the hand dealt beside it, that field held the hand itself, and a hand
+        // against itself is a matchup that cannot be dealt - which came out as
+        // a column of noughts.
+        let villain = self.raw_opponent_range_for(seat);
         (!villain.is_empty())
-            .then(|| equity::hotness(hand, &villain, &self.board, self.dead))
+            .then(|| equity::hotness(hand, &villain, &self.board, self.dealt_elsewhere(seat)))
             .flatten()
     }
 
@@ -1754,11 +2198,16 @@ impl Session {
 
     /// The other seat's range, as narrow as its own filters make it.
     fn raw_opponent_range(&self) -> Range {
-        if let Some(seat) = self.versus_seat() {
+        self.raw_opponent_range_for(self.active)
+    }
+
+    /// The same, for a seat that is not necessarily the selected one.
+    fn raw_opponent_range_for(&self, mine: usize) -> Range {
+        if let Some(seat) = self.versus_seat().filter(|seat| *seat != mine) {
             return self.narrowed_for(seat);
         }
         (0..self.players.len())
-            .filter(|seat| *seat != self.active)
+            .filter(|seat| *seat != mine)
             .map(|seat| self.narrowed_for(seat))
             .fold(Range::empty(), |field, range| field.union(&range))
     }
@@ -1915,6 +2364,15 @@ impl Session {
             }
         }
         session.active = snapshot.active.min(session.players.len().saturating_sub(1));
+        // A link carries a range, not a pair of handle positions: park them on
+        // what came back, so the slider describes it rather than describing
+        // whatever it last described in some other session.
+        let restored_to = session.active;
+        for seat in 0..session.players.len() {
+            session.active = seat;
+            session.park_slider();
+        }
+        session.active = restored_to;
         session.rebuild();
 
         // The grouping has to be read after the board, because which hands a
@@ -2460,6 +2918,226 @@ mod tests {
         assert_eq!(session.mark(StatId::FLUSH_DRAW).key(), "mixed");
         session.clear_groups();
         assert_eq!(session.mark(StatId::FLUSH_DRAW).key(), "none");
+    }
+
+    #[test]
+    fn the_slider_has_a_stop_wherever_the_equity_changes() {
+        let mut session = session_on("Kh 7d 2c", "AA,KK,QQ,JJ");
+        session.set_active(1);
+        session.set_active_range_text("A2s+").unwrap();
+        session.set_active(0);
+
+        let steps = session.equity_steps();
+        assert!(
+            !steps.is_empty(),
+            "a board and something to measure against"
+        );
+        // Ascending, ending at the whole range: a stop at nought would paint
+        // nothing and is not a stop.
+        assert!(steps.windows(2).all(|pair| pair[0] < pair[1]), "{steps:?}");
+        assert!(steps[0] > 0.0);
+        assert!(
+            (steps[steps.len() - 1] - 1.0).abs() < 1e-6,
+            "{:?}",
+            steps.last()
+        );
+
+        // Four pairs, and every combination of a pair is worth what the others
+        // are, so there are nothing like twenty-four stops.
+        assert!(steps.len() <= 8, "{} stops for four pairs", steps.len());
+
+        // Asking for exactly a step gets exactly that step, which is what lets
+        // the slider show the reader the number it is going to act on.
+        let at = f64::from(steps[0]);
+        let next = f64::from(steps[1]);
+        let on_the_step = session.set_continue_by_equity(at).expect("a cut").covered;
+        assert!((on_the_step - at).abs() < 1e-6, "{on_the_step} for {at}");
+
+        // Anywhere inside a gap paints the same thing - the step above it,
+        // because a slice has to cover what was asked for. That is what makes
+        // the places between steps worth skipping: they are all one place.
+        let early = session
+            .set_continue_by_equity(at + (next - at) * 0.25)
+            .expect("a cut")
+            .covered;
+        let late = session
+            .set_continue_by_equity(at + (next - at) * 0.75)
+            .expect("a cut")
+            .covered;
+        assert_eq!(early, late, "the whole gap is one answer");
+        assert!(
+            (early - next).abs() < 1e-6,
+            "and the answer is the step above"
+        );
+
+        // Before a flop there is nothing to sort by and the slider says so.
+        let empty = Session::new();
+        assert!(empty.equity_steps().is_empty());
+    }
+
+    #[test]
+    fn a_dealt_hand_blocks_everything_that_counts_cards() {
+        let mut session = session_on("Kh 7d 2c", "22+,A2s+");
+        session.set_active(1);
+        session.set_active_range_text("QQ+").unwrap();
+        session.set_active(0);
+
+        let before = Counts {
+            flops: session.flop_breakdown().total,
+            filter: session.flop_filter_count(),
+            painted: session.painted_combos(),
+            pass: session.preflop().flops,
+            playable: session
+                .cell_combos(HandClass::parse("AKs").unwrap(), None)
+                .iter()
+                .filter(|combo| !combo.dealt)
+                .count(),
+        };
+        assert_eq!(before.flops, 22_100);
+
+        // Two cards dealt to a seat of its own. They are gone from the deck:
+        // no flop can hold them, no hand of anybody's range can use them, and
+        // nothing that counts cards may go on pretending otherwise.
+        session
+            .add_hand(Combo::parse("AsKs").unwrap())
+            .expect("room");
+        let after = Counts {
+            flops: session.flop_breakdown().total,
+            filter: session.flop_filter_count(),
+            painted: session.painted_combos(),
+            pass: session.preflop().flops,
+            playable: session
+                .cell_combos(HandClass::parse("AKs").unwrap(), None)
+                .iter()
+                .filter(|combo| !combo.dealt)
+                .count(),
+        };
+
+        // Two cards out of forty-seven leaves the flops that used either.
+        assert!(
+            after.flops < before.flops,
+            "{} vs {}",
+            after.flops,
+            before.flops
+        );
+        assert_eq!(after.filter, after.flops, "the filter counts the same deck");
+        assert_eq!(after.pass, after.flops, "and so does the pass");
+        assert!(
+            after.painted < before.painted,
+            "the hands using those cards are gone"
+        );
+
+        // The breakdown of a cell counts one combination fewer, and names the
+        // one that went.
+        assert_eq!(
+            after.playable,
+            before.playable - 1,
+            "the ace-king of spades is gone"
+        );
+        let cell = session.cell_combos(HandClass::parse("AKs").unwrap(), None);
+        let spades = cell
+            .iter()
+            .find(|combo| combo.combo == Combo::parse("AsKs").unwrap())
+            .expect("the cell holds it");
+        assert!(spades.dealt, "somebody is holding it");
+
+        // And a flop dealt from the panel never uses them either.
+        for _ in 0..25 {
+            assert!(session.deal_flop());
+            let board = session.board().to_string();
+            assert!(!board.contains("As") && !board.contains("Ks"), "{board}");
+        }
+    }
+
+    /// The numbers the blocking test watches, read the same way twice.
+    struct Counts {
+        flops: u64,
+        filter: u64,
+        painted: f64,
+        pass: u64,
+        playable: usize,
+    }
+
+    #[test]
+    fn hotness_finds_the_hand_wherever_it_is_sitting() {
+        let mut session = session_on("Kh 7d 2c", "22+,A2s+");
+        assert!(session.hotness().is_none(), "no hand, nothing to say");
+
+        // Dealt at a seat of its own, and the reader left on their range: the
+        // view is about that hand all the same, because there is only one.
+        let hand = Combo::parse("AhKs").unwrap();
+        session.add_hand(hand).expect("room at the table");
+        assert_eq!(session.active_index(), 0, "still on the range");
+        assert!(session.lone_combo().is_none(), "which is not a hand");
+        let cards = session.hotness().expect("the hand at the table");
+        assert_eq!(cards.len(), 52 - 3 - 2, "every card still to come");
+
+        // Going to the hand asks the same question and gets the same answer.
+        session.set_active(2);
+        assert_eq!(
+            session.hotness().map(|cards| cards.len()),
+            Some(cards.len())
+        );
+
+        // The hand is measured against the other seats, not against the seat
+        // the reader happens to be looking at - which would put the hand in its
+        // own opposition, a matchup that cannot be dealt, and every card would
+        // come out worth exactly nothing.
+        session.set_active(0);
+        let from_the_range = session.hotness().expect("the hand at the table");
+        assert!(
+            from_the_range.iter().any(|card| card.equity.abs() > 1e-6),
+            "every card came out at nought, so the hand was facing itself"
+        );
+
+        // Two hands is a question with no answer: which of them?
+        session
+            .add_hand(Combo::parse("QdQs").unwrap())
+            .expect("room");
+        assert!(
+            session.hotness().is_none(),
+            "two hands, and nobody said which"
+        );
+    }
+
+    #[test]
+    fn a_cell_says_which_statistics_it_is_about() {
+        let session = session_on("Kh 7d 2c", "22+");
+        let index =
+            |key: &str| crate::stats::stat_by_key(key).expect("a statistic").index() as usize;
+
+        // A pair of aces on a king-high board is an overpair, every time.
+        let aces = session.class_stats(HandClass::parse("AA").unwrap());
+        assert_eq!(aces[index("overpair")], 1.0);
+        assert_eq!(aces[index("top-pair")], 0.0);
+
+        // A pair of kings is trips whenever it is not blocked - and the board
+        // holds one king, so three of the six combinations are gone.
+        let kings = session.class_stats(HandClass::parse("KK").unwrap());
+        assert_eq!(kings[index("set")], 1.0);
+
+        // A king in hand is top pair whichever king it is; the other card
+        // decides nothing here.
+        let king_queen = session.class_stats(HandClass::parse("KQo").unwrap());
+        assert_eq!(king_queen[index("top-pair")], 1.0);
+
+        // A cell that is only sometimes about a statistic says how often: of
+        // the four suited aces, the one in the board's suit has two cards to a
+        // backdoor flush and the other three have not.
+        let ace_five = session.class_stats(HandClass::parse("A5s").unwrap());
+        let backdoor = ace_five[index("bdfd-2")];
+        assert!(backdoor > 0.0 && backdoor < 1.0, "{backdoor}");
+
+        // One combination is a yes or a no, never a share.
+        let one = session.combo_stats(Combo::parse("AsAh").unwrap());
+        assert_eq!(one[index("overpair")], 1.0);
+        assert!(one.iter().all(|share| *share == 0.0 || *share == 1.0));
+
+        // A cell the board has taken away entirely has nothing to say.
+        let seven_two = session.class_stats(HandClass::parse("77").unwrap());
+        assert!(!seven_two.is_empty());
+        let blocked = session_on("Kh Ks Kd", "22+").class_stats(HandClass::parse("KK").unwrap());
+        assert!(blocked.is_empty(), "every king is on the board");
     }
 
     #[test]
@@ -3158,6 +3836,296 @@ mod tests {
         assert!(session.active().range.combo_count() > count);
         session.clear_active_range();
         assert!(session.active().range.is_empty());
+    }
+
+    #[test]
+    fn the_handles_park_on_the_chart_they_describe() {
+        // Loading a chart does not leave the handles where the last range put
+        // them: they move to the window that comes closest to this one, which
+        // says how wide it is and leaves both of them somewhere to go.
+        let mut session = Session::new();
+        assert!(session.load_library("cash-nl10-defend-utg"));
+        let chart = session.active().range.clone();
+        let parked = session.slider();
+        assert_eq!(parked.low, 0.0, "the chart holds the best hands there are");
+        let width = chart.percent_of_deck() * 100.0;
+        assert!(
+            (parked.high - width).abs() < 6.0,
+            "parked at {} for a {width:.1}% chart",
+            parked.high
+        );
+        // Both handles have somewhere to go, which is the whole point: right to
+        // take in the hands the chart folds, left to cut off the ones it
+        // three-bets.
+        assert!(parked.high < 100.0);
+        assert_eq!(session.active().range, chart, "parking moved no hands");
+
+        // The chart is still named after an edit, and known to be edited.
+        assert!(!session.library_edited());
+        assert_eq!(
+            session.from_library().map(|from| from.id.as_str()),
+            Some("cash-nl10-defend-utg")
+        );
+        session.set_active_class(HandClass::parse("72o").unwrap(), 1.0);
+        assert!(session.library_edited());
+        assert_eq!(
+            session.from_library().map(|from| from.id.as_str()),
+            Some("cash-nl10-defend-utg"),
+            "edited, not forgotten"
+        );
+
+        // Clearing is starting again rather than editing.
+        session.clear_active_range();
+        assert!(session.from_library().is_none());
+        assert!(!session.library_edited());
+    }
+
+    #[test]
+    fn the_slider_reaches_the_whole_deck_whatever_is_in_the_matrix() {
+        // The complaint this answers: with the handles spanning the chart
+        // instead of the deck, the blue one was already at its right-hand stop
+        // and there was no way to take in a hand the chart folds.
+        let mut session = Session::new();
+        assert!(session.load_library("cash-nl10-open-utg"));
+        let opens = session.active().range.combo_count();
+        session.set_active_window(0.0, 100.0);
+        // Every cell, and the chart's own cells at the weights it gave them -
+        // widening a chart must not quietly turn its mixed cells into pure ones.
+        assert_eq!(
+            session.active().range.cell_percent(),
+            100.0,
+            "the far right leaves no cell out"
+        );
+        assert_eq!(
+            session.active().range.get(Combo::parse("7h2d").unwrap()),
+            1.0,
+            "a hand the chart folds arrives whole"
+        );
+        assert!(session.active().range.combo_count() > opens);
+        assert!(session.library_edited(), "which is not the chart any more");
+
+        assert!(session.load_library("cash-nl10-open-utg"));
+        let (low, high) = (session.slider().low, session.slider().high);
+        session.set_active_window(low, high + 10.0);
+        assert!(
+            session.active().range.combo_count() > opens,
+            "widening adds hands the chart folded"
+        );
+
+        // And at rest it is the chart, untouched: parking is not a cut.
+        assert!(session.load_library("cash-nl10-open-utg"));
+        let chart = session.active().range.clone();
+        let (low, high) = (session.slider().low, session.slider().high);
+        session.set_active_window(low, high);
+        assert_eq!(
+            session.active().range,
+            chart,
+            "the handles were already here"
+        );
+    }
+
+    #[test]
+    fn an_empty_matrix_leaves_the_slider_closed() {
+        // With nothing to describe the handles sit together at the top, and
+        // opening one builds a range out of the ranking, strongest hands first.
+        let mut session = Session::new();
+        session.clear_active_range();
+        assert_eq!(session.slider().low, 0.0);
+        assert_eq!(session.slider().high, 0.0);
+
+        session.set_active_window(0.0, 10.0);
+        let built = session.active().range.combo_count();
+        assert!(built > 0.0 && built <= 0.10 * 1326.0);
+        assert_eq!(
+            session.active().range,
+            Range::window(0.0, 10.0, session.ranking()),
+            "the same band it has always selected"
+        );
+    }
+
+    #[test]
+    fn preflop_equity_comes_with_the_pass_over_the_flops() {
+        let mut session = Session::new();
+        session.set_active_range_text("22+, A2s+, ATo+").unwrap();
+        session.add_player("Range B");
+        session.set_active(1);
+        session
+            .set_active_range_text("22+, A2s+, K9s+, A8o+")
+            .unwrap();
+        session.set_active(0);
+
+        // Nothing until the pass is run: every redraw reads this, and none of
+        // them may cost a second.
+        assert!(session.preflop_equity_work() > 0.0);
+        assert!(!session.preflop_equity_ready());
+        assert!(session.equity_by_combo().is_none());
+
+        // One pass, both answers - there is no second button to press.
+        session.preflop();
+        assert!(session.preflop_equity_ready());
+        let got = session.equity_by_combo().expect("a pass was run");
+
+        // Aces beat sevens beat the ace-ten, and every hand in the range has a
+        // number while the ones outside it have none.
+        let of = |hand: &str| got.equity[Combo::parse(hand).unwrap().index() as usize];
+        assert!(of("AhAs") > of("7h7s"), "{} vs {}", of("AhAs"), of("7h7s"));
+        assert!(of("7h7s") > of("AhTd"));
+        assert!(of("AhAs") > 0.7 && of("AhAs") < 0.95);
+        assert_eq!(of("7h2d"), -1.0, "not in the range");
+
+        // Both curves, because the graph draws both.
+        assert!(session.opponent_equity_by_combo().is_some());
+
+        // And it is about the ranges it was run on: move one and the pass is
+        // gone rather than quietly wrong.
+        session.set_active_class(HandClass::parse("72o").unwrap(), 1.0);
+        assert!(!session.preflop_equity_ready());
+        assert!(session.equity_by_combo().is_none());
+    }
+
+    #[test]
+    fn one_pass_answers_both_seats() {
+        // The graph draws both curves, so a pass works out both directions -
+        // and the other seat's question is this one backwards. Filing the
+        // answer by the pair rather than by the seat is what stops the reader
+        // being asked for a second run of work already done.
+        let mut session = Session::new();
+        session.set_active_range_text("22+, AQs+, AKo").unwrap();
+        session.set_active(1);
+        session
+            .set_active_range_text("22+, A2s+, K9s+, A8o+")
+            .unwrap();
+        session.set_active(0);
+
+        session.preflop();
+        let from_a = session.equity_by_combo().expect("the seat that ran it");
+        let theirs = session
+            .opponent_equity_by_combo()
+            .expect("and the other curve");
+
+        session.set_active(1);
+        let from_b = session
+            .equity_by_combo()
+            .expect("the other seat, with nothing else pressed");
+        assert_eq!(from_b, theirs, "which is the curve A already drew");
+        assert!(session.preflop_equity_ready());
+        assert_eq!(
+            session.opponent_equity_by_combo(),
+            Some(from_a),
+            "and looking back the other way is the first curve again"
+        );
+    }
+
+    #[test]
+    fn a_dealt_hand_is_something_to_measure_against() {
+        // A hand dealt at the other seat is the range on that side. Crossing
+        // its own two cards out of it - which is what blocking by every hand
+        // at the table did - left nothing to measure, and the equity views
+        // went blank unless the reader looked from the hand's own seat.
+        let mut session = Session::new();
+        session.set_active_range_text("22+, AQs+, AKo").unwrap();
+        let seat = session
+            .add_hand(Combo::parse("KhKs").unwrap())
+            .expect("room at the table");
+        // The empty second seat is not in the pot; the hand is.
+        session.set_active(1);
+        session.clear_active_range();
+        session.set_active(0);
+
+        session.preflop();
+        let got = session.equity_by_combo().expect("a range against a hand");
+        let of = |hand: &str| f64::from(got.equity[Combo::parse(hand).unwrap().index() as usize]);
+        // Aces are ahead of a pair of kings; the other pairs are well behind.
+        assert!(of("AhAs") > 0.7, "{:.4}", of("AhAs"));
+        assert!(of("7h7s") < 0.3, "{:.4}", of("7h7s"));
+        // The hand blocks the two kings it holds, so they are not in the range
+        // any more - but the two that are left are still measured.
+        assert_eq!(of("KhKd"), -1.0, "the hand holds that king");
+        assert!(of("KcKd") > 0.0);
+
+        // And from the hand's own seat the question is the same one backwards,
+        // which the pass has already answered.
+        session.set_active(seat);
+        assert!(session.preflop_equity_ready());
+        let hand = session
+            .equity_by_combo()
+            .expect("the hand against the range");
+        assert!(hand.equity[Combo::parse("KhKs").unwrap().index() as usize] > 0.4);
+    }
+
+    #[test]
+    fn preflop_equity_is_over_the_flops_the_ticks_leave() {
+        // Asking what a range is worth on paired boards is a different question
+        // from asking what it is worth anywhere, and the panel that asks one
+        // must not quietly answer the other.
+        let mut session = Session::new();
+        session.set_active_range_text("77, AKo").unwrap();
+        session.add_player("Range B");
+        session.set_active(1);
+        session
+            .set_active_range_text("22+, A2s+, K9s+, A8o+")
+            .unwrap();
+        session.set_active(0);
+
+        session.preflop();
+        let anywhere = session.equity_by_combo().expect("a pass was run");
+
+        // Ticking a group is a different question, so the answer goes with it.
+        assert!(session.toggle_flop_group("pairing", "paired-top"));
+        assert!(!session.preflop_equity_ready());
+
+        session.preflop();
+        let paired = session.equity_by_combo().expect("and another pass");
+        let of = |data: &ComboEquity, hand: &str| {
+            f64::from(data.equity[Combo::parse(hand).unwrap().index() as usize])
+        };
+        // A board paired at the top leaves ace-king with one pair to make and
+        // hands the field trips, so it is worth less there than anywhere.
+        assert!(
+            of(&paired, "AhKd") < of(&anywhere, "AhKd") - 0.01,
+            "{:.4} on top-paired boards against {:.4} anywhere",
+            of(&paired, "AhKd"),
+            of(&anywhere, "AhKd")
+        );
+
+        // Clearing the ticks asks the wider question again, and gets the same
+        // answer as before - the sampler is seeded, so this is reproducible.
+        session.clear_flop_filter();
+        session.preflop();
+        let back = session.equity_by_combo().expect("and a third");
+        assert!((of(&back, "AhKd") - of(&anywhere, "AhKd")).abs() < 1e-9);
+    }
+
+    #[test]
+    fn preflop_equity_agrees_with_the_hand_by_hand_estimate() {
+        let mut session = Session::new();
+        session
+            .set_active_range_text("22+, A2s+, K9s+, QTs+, ATo+")
+            .unwrap();
+        session.add_player("Range B");
+        session.set_active(1);
+        let villain = Range::parse("22+, A2s+, K2s+, Q8s+, J9s+, A2o+, K9o+").unwrap();
+        session
+            .set_active_range_text(&villain.to_notation())
+            .unwrap();
+        session.set_active(0);
+        session.preflop();
+        let got = session.equity_by_combo().unwrap();
+
+        // Against the one-hand-at-a-time sampler, which draws its own hands and
+        // its own boards and so agrees only if both are right.
+        for hand in ["AhAs", "KhKs", "AhKh", "7h7s", "QhTh", "AhJd"] {
+            let combo = Combo::parse(hand).unwrap();
+            let mine = f64::from(got.equity[combo.index() as usize]);
+            let check = equity::hand_vs_range(combo, &villain, &Board::empty(), CardSet::EMPTY)
+                .expect("a hand against a range")
+                .players[0]
+                .equity;
+            assert!(
+                (mine - check).abs() < 0.02,
+                "{hand}: {mine:.4} against {check:.4}"
+            );
+        }
     }
 
     #[test]

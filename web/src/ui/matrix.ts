@@ -16,10 +16,15 @@ import {
   chrome,
   classLabels,
   highlight,
+  colourSlot,
+  comboStats,
   markColour,
   mutate,
+  peekAt,
   repaint,
+  revision,
   state,
+  statDefs,
 } from "../store";
 import { SUIT_GLYPH } from "./cards";
 import { press, touchOnly } from "./press";
@@ -30,6 +35,11 @@ let painting: number | null = null;
 const SUITS = ["s", "h", "d", "c"] as const;
 
 export function createMatrix(): HTMLElement {
+  // A new grid wears nothing and has been drawn from nothing: what the old one
+  // was showing is no guide to what this one needs.
+  drawnFrom = "";
+  wearing = { open: -1, peeking: -1, peek: -1 };
+
   const frame = document.createElement("div");
   frame.className = "matrix-frame";
 
@@ -86,7 +96,11 @@ export function createMatrix(): HTMLElement {
       // The breakdown follows the pointer unless one has been pinned.
       if (chrome.suitCell === null && chrome.suitPeek !== index) {
         chrome.suitPeek = index;
+        chrome.peekClass = index;
+        chrome.peekCombo = null;
         repaint();
+      } else {
+        peekAt(index);
       }
     });
     cell.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -97,8 +111,8 @@ export function createMatrix(): HTMLElement {
   grid.addEventListener("pointerleave", () => {
     if (chrome.suitCell === null && chrome.suitPeek !== null) {
       chrome.suitPeek = null;
-      repaint();
     }
+    peekAt(null);
   });
 
   window.addEventListener("pointerup", () => {
@@ -115,13 +129,59 @@ function apply(index: number): void {
   mutate((engine) => engine.setClassWeight(index, weight));
 }
 
+/**
+ * What the last full pass over the cells was drawn from, and which cells wear
+ * the classes that follow the pointer.
+ *
+ * Moving the pointer one cell across changes three cells at most, and used to
+ * rewrite all hundred and sixty-nine: every fill, every gradient, every class.
+ * That is fifteen hundred writes to the page for a mouse moving a centimetre,
+ * and it is what a hover felt like.
+ */
+let drawnFrom = "";
+let wearing = { open: -1, peeking: -1, peek: -1 };
+
 export function renderMatrix(frame: HTMLElement): void {
   const grid = frame.querySelector<HTMLElement>(".matrix")!;
   const view = state();
+  const cells = grid.children;
+
+  // The classes that follow the pointer, moved from the cells that had them to
+  // the cells that want them and nowhere else.
+  const wants = {
+    open: chrome.suitCell ?? -1,
+    peeking: chrome.suitPeek ?? -1,
+    peek: chrome.peekClass !== null && chrome.peekClass !== chrome.suitPeek ? chrome.peekClass : -1,
+  };
+  for (const name of ["open", "peeking", "peek"] as const) {
+    if (wearing[name] === wants[name]) continue;
+    (cells[wearing[name]] as HTMLElement | undefined)?.classList.remove(name);
+    (cells[wants[name]] as HTMLElement | undefined)?.classList.add(name);
+    wearing[name] = wants[name];
+  }
+
+  // The breakdown is about the cell under the pointer, so it follows it.
+  const popup = frame.querySelector<HTMLElement>(".suit-popup")!;
+  renderSuitPopup(popup, chrome.suitCell ?? chrome.suitPeek, view.filtersEnabled);
+  if (!popup.hidden) {
+    // Anchored to the cell it is about, and nudged back inside the panel when
+    // the cell is near an edge.
+    const which = chrome.suitCell ?? chrome.suitPeek ?? 0;
+    popup.style.setProperty("--row", String(Math.floor(which / 13)));
+    popup.style.setProperty("--col", String(which % 13));
+    popup.classList.toggle("to-left", which % 13 > 6);
+    popup.classList.toggle("to-top", Math.floor(which / 13) > 6);
+  }
+
+  // Everything else is about the range and the board, so it is redrawn when
+  // those move and not when the pointer does.
+  const from = `${revision()}/${chrome.hovered}/${view.filtersEnabled}/${chrome.visible}`;
+  if (from === drawnFrom) return;
+  drawnFrom = from;
+
   // Hovering a statistic is a question being asked right now, so it wins the
   // glow; the cut keeps its own marker underneath either way.
   const lit = chrome.hovered !== null ? highlight(chrome.hovered) : null;
-  const cells = grid.children;
 
   for (let index = 0; index < 169; index += 1) {
     const cell = cells[index] as HTMLElement;
@@ -136,8 +196,6 @@ export function renderMatrix(frame: HTMLElement): void {
     cell.classList.toggle("on", weight > 0);
     cell.classList.toggle("partial", weight > 0 && weight < 0.999);
     cell.style.setProperty("--fill", `${(weight * 100).toFixed(1)}%`);
-
-    cell.classList.toggle("open", chrome.suitCell === index);
 
     // The glow covers the share of the cell that matches, at full strength,
     // rather than washing the whole cell at a fraction of it: one flushdraw in
@@ -161,8 +219,6 @@ export function renderMatrix(frame: HTMLElement): void {
     cell.classList.toggle("grouped", marked);
     cell.style.setProperty("--groups", marked ? stripe(colours) : "transparent");
 
-    cell.classList.toggle("peeking", chrome.suitPeek === index);
-
     // A suited cell holding only some of its suits says which, in pips: the one
     // place a suit is unambiguous, since each combination of a suited hand is
     // one suit. They overlap, because four pips at a readable size do not fit a
@@ -184,18 +240,6 @@ export function renderMatrix(frame: HTMLElement): void {
       );
       if (!holder) cell.append(into);
     }
-  }
-
-  const popup = frame.querySelector<HTMLElement>(".suit-popup")!;
-  renderSuitPopup(popup, chrome.suitCell ?? chrome.suitPeek, view.filtersEnabled);
-  if (!popup.hidden) {
-    // Anchored to the cell it is about, and nudged back inside the panel when
-    // the cell is near an edge.
-    const which = chrome.suitCell ?? chrome.suitPeek ?? 0;
-    popup.style.setProperty("--row", String(Math.floor(which / 13)));
-    popup.style.setProperty("--col", String(which % 13));
-    popup.classList.toggle("to-left", which % 13 > 6);
-    popup.classList.toggle("to-top", Math.floor(which / 13) > 6);
   }
 }
 
@@ -371,6 +415,9 @@ function suitCell(
   // combination that is not in the range has neither answer, and lighting it
   // anyway would say the range holds something it does not.
   element.classList.toggle("lit", held && combo.matches);
+  // The one combination being pointed at, when the pointing is happening in
+  // another panel and this window is open on the cell it belongs to.
+  element.classList.toggle("peek", chrome.peekCombo === combo.index);
   element.classList.toggle(
     "filtered",
     filtersOn && combo.weight > 0 && combo.passing < combo.weight - 1e-6,
@@ -380,8 +427,15 @@ function suitCell(
     "--passing",
     `${(combo.weight > 0 ? (combo.passing / combo.weight) * 100 : 0).toFixed(1)}%`,
   );
-  element.classList.toggle("grouped", held && combo.colour !== "none");
-  markColour(element, held ? combo.colour : "none");
+  // A hand can be in more than one painted category - top pair and a flushdraw
+  // at once - and it wears one colour, because one of them is what the filters
+  // act on. The band says so and says the rest too: the colour that decides
+  // comes first, the others follow it.
+  const groups = held ? marksOf(combo.index, combo.colour) : [];
+  element.classList.toggle("grouped", groups.length > 0);
+  markColour(element, groups[0] ?? "none");
+  if (groups.length > 1) element.style.setProperty("--groups", bands(groups));
+  else element.style.removeProperty("--groups");
   element.title = combo.dealt
     ? `${combo.name} — the board or the dead cards have taken one of its cards`
     : `${combo.name} — ${(combo.weight * 100).toFixed(0)}%${
@@ -402,8 +456,46 @@ function suitCell(
   });
   element.addEventListener("pointerenter", () => {
     if (suitBrush !== null) paint();
+    // One combination rather than the cell: pointing at the ace of spades with
+    // the king of spades asks about that hand and no other.
+    peekAt(chrome.suitCell ?? chrome.suitPeek, combo.index);
+  });
+  element.addEventListener("pointerleave", () => {
+    if (chrome.peekCombo === combo.index) peekAt(chrome.suitCell ?? chrome.suitPeek);
   });
   return element;
+}
+
+/**
+ * The colours of the painted categories one hand belongs to.
+ *
+ * The colour it actually wears first - that is the one the street filters act
+ * on, and it has to stay findable - then any other painted category it is also
+ * in. A category whose hands disagree carries no colour of its own, so it is
+ * left out; what a hand in one of those wears is its own colour, which is
+ * already first.
+ */
+function marksOf(combo: number, own: string): string[] {
+  const marks = state().marks;
+  const shares = comboStats(combo);
+  const found = own === "none" ? [] : [own];
+  for (const definition of statDefs) {
+    if ((shares[definition.index] ?? 0) <= 0) continue;
+    const mark = marks[definition.index];
+    if (!mark || mark === "none" || mark === "mixed" || found.includes(mark)) continue;
+    found.push(mark);
+  }
+  return found;
+}
+
+/** One band per colour, left to right. */
+function bands(colours: string[]): string {
+  const step = 100 / colours.length;
+  const stops = colours.map(
+    (colour, at) =>
+      `var(--group-${colourSlot(colour)}) ${(at * step).toFixed(2)}% ${((at + 1) * step).toFixed(2)}%`,
+  );
+  return `linear-gradient(to right, ${stops.join(", ")})`;
 }
 
 /** The colour strip along a cell's foot, as a CSS gradient. */

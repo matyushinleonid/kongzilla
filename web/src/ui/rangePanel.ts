@@ -8,6 +8,7 @@ import {
   presets,
   rankings,
   repaint,
+  sliderStops,
   state,
   statCombos,
   statDefs,
@@ -88,8 +89,15 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   editStrip.hidden = true;
 
   // One slider, two handles: the red one is where the band starts and the blue
-  // one where it ends. They span the whole ranking to begin with, and neither can
-  // overtake the other.
+  // one where it ends, and neither can overtake the other. Both are percentages
+  // of the whole deck however narrow the matrix is - the far left of the red one
+  // is the best hand there is and the far right of the blue one the worst -
+  // which is what lets the slider widen a range as well as narrow it.
+  //
+  // Where they *park* follows the matrix, and that is the engine's to say: a
+  // chart is not one of the slider's windows, but one window fits it better
+  // than any other and that is where the handles go. So they are mirrored out
+  // of the view rather than kept here.
   const sliders = document.createElement("div");
   sliders.className = "sliders";
   const barTrack = document.createElement("div");
@@ -100,7 +108,6 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   const top = handle("slider-top", "Where the band ends");
   cut.value = String(chrome.window.low);
   top.value = String(chrome.window.high);
-  let handlesSynced = false;
   barTrack.append(span, cut, top);
   const percent = document.createElement("input");
   percent.type = "number";
@@ -109,19 +116,34 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   percent.step = "0.5";
   percent.className = "percent";
   percent.setAttribute("aria-label", "Percent of all hands");
+  percent.title = "What share of all 1326 hands is in the matrix. Type one to select it.";
   sliders.append(barTrack, percent);
 
   const applyWindow = () => {
     mutate((engine) => engine.setWindow(chrome.window.low, chrome.window.high));
   };
+  // The handles move whole matrix cells, so the value is put on the nearest
+  // cell edge before it is used for anything. Without it a handle can sit a
+  // third of a cell from where it selects - and a press of an arrow key can
+  // land somewhere that selects exactly what the last position did, which
+  // reads as a key that does nothing.
+  let stops: Float32Array = new Float32Array();
+  const snap = (value: number): number => {
+    if (stops.length === 0) return value;
+    let best = stops[0];
+    for (const stop of stops) {
+      if (Math.abs(stop - value) < Math.abs(best - value)) best = stop;
+    }
+    return best;
+  };
   cut.addEventListener("input", () => {
     // Clamp rather than swap, so a handle stops at its neighbour.
-    chrome.window.low = Math.min(Number(cut.value), chrome.window.high);
+    chrome.window.low = Math.min(snap(Number(cut.value)), chrome.window.high);
     cut.value = String(chrome.window.low);
     applyWindow();
   });
   top.addEventListener("input", () => {
-    chrome.window.high = Math.max(Number(top.value), chrome.window.low);
+    chrome.window.high = Math.max(snap(Number(top.value)), chrome.window.low);
     top.value = String(chrome.window.high);
     applyWindow();
   });
@@ -138,7 +160,7 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
     const thumb = 11;
     const travel = Math.max(1, rect.width - thumb);
     const share = (clientX - rect.left - thumb / 2) / travel;
-    return Math.min(100, Math.max(0, Math.round(share * 200) / 2));
+    return snap(Math.min(100, Math.max(0, share * 100)));
   };
   const drive = (which: HTMLInputElement, value: number) => {
     which.value = String(value);
@@ -185,11 +207,14 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   // On window, so letting go anywhere ends the drag rather than leaving it live.
   window.addEventListener("pointerup", endDrag);
 
+  // The field says what the matrix holds as a share of the deck, so typing in
+  // it sets exactly that. It used to move the blue handle instead, which meant
+  // the same thing only while the handles were cutting the deck - and once they
+  // are cutting a chart, a number typed here and the number read back would be
+  // two different percentages.
   percent.addEventListener("change", () => {
     const size = Math.max(0, Math.min(100, Number(percent.value) || 0));
-    chrome.window.high = Math.min(100, chrome.window.low + size);
-    top.value = String(chrome.window.high);
-    applyWindow();
+    mutate((engine) => engine.setTopPercent(size));
   });
 
   const summary = document.createElement("p");
@@ -219,12 +244,7 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   clear.type = "button";
   clear.className = "btn quick";
   clear.textContent = "Clear";
-  clear.addEventListener("click", () => {
-    chrome.window = { low: 0, high: 0 };
-    cut.value = "0";
-    top.value = "0";
-    mutate((engine) => engine.clearRange());
-  });
+  clear.addEventListener("click", () => mutate((engine) => engine.clearRange()));
   quick.append(clear);
 
   // The preflop library, one block per game. Flopzilla ships an empty predef
@@ -254,7 +274,7 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
     chrome.libraryNoZeroEv = !chrome.libraryNoZeroEv;
     // The switch is about what a chart is, so the one on the table changes
     // with it rather than waiting to be loaded again.
-    const loaded = chrome.libraryChart?.id;
+    const loaded = state().players[state().active].chart;
     if (loaded) loadChart(loaded);
     else repaint();
   });
@@ -307,26 +327,36 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   const loadChart = (id: string) => {
     mutate((engine) => engine.loadLibrary(id, chrome.libraryNoZeroEv));
     track("chart_loaded");
-    chrome.libraryChart = { id, notation: state().players[state().active].notation };
     repaint();
   };
 
   const render = () => {
     const view = state();
+    // A hand has been dealt: there is nothing to type into, paint over or
+    // narrow. The panel greys out rather than leaving controls that quietly
+    // refuse, which is the difference between "you cannot" and "it is broken".
+    panel.classList.toggle("dealt-hand", !view.editable);
+    const player = view.players[view.active];
+    // A chart that has been edited is still the chart the reader chose, so its
+    // chips stay lit and go dashed instead of going out: the spot is still the
+    // spot, it is just not the solver's answer to it any more.
+    const edited = player.chartEdited;
+    const from =
+      player.chart === null
+        ? null
+        : (library.entries.find((entry) => entry.id === player.chart) ?? null);
+
+    // The switch says what a chart arrives as, so it is only there while a
+    // chart is what the matrix holds. Once a hand has been painted in or a
+    // handle dragged, there is no chart to load differently - and a switch that
+    // stayed put would be asking about a range it no longer describes.
+    trimRow.hidden = from === null || edited;
     trim.textContent = `${chrome.libraryNoZeroEv ? "☑" : "☐"} exclude 0-EV hands`;
     trim.classList.toggle("on", chrome.libraryNoZeroEv);
     trim.setAttribute("aria-pressed", String(chrome.libraryNoZeroEv));
     trim.title = chrome.libraryNoZeroEv
       ? "Charts arrive without the hands the solver makes nothing with. Press to load them whole."
       : "Charts arrive as the solver plays them. Press to leave out the hands whose EV is nought — the ones it would break even folding.";
-    // A hand has been dealt: there is nothing to type into, paint over or
-    // narrow. The panel greys out rather than leaving controls that quietly
-    // refuse, which is the difference between "you cannot" and "it is broken".
-    panel.classList.toggle("dealt-hand", !view.editable);
-    const player = view.players[view.active];
-    if (chrome.libraryChart && chrome.libraryChart.notation !== player.notation) {
-      chrome.libraryChart = null;
-    }
 
     for (const block of games) {
       const stacks = library.stacks.filter(([, , game]) => game === block.game);
@@ -349,7 +379,7 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
               // blinds, not a row of chips to press again - and before this
               // they got neither, because changing the depth changed only which
               // chips were drawn and left the old range sitting there.
-              const open = chrome.libraryChart?.id;
+              const open = state().players[state().active].chart;
               const showing = open && library.entries.find((entry) => entry.id === open);
               const sameSpot =
                 showing &&
@@ -423,12 +453,15 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
           button.title = trimmed
             ? `${chart.description} — ${chart.percent.toFixed(1)}% of hands, less the 0-EV ones`
             : `${chart.description} — ${chart.percent.toFixed(1)}% of hands`;
-          button.classList.toggle("active", chrome.libraryChart?.id === chart.id);
+          const loaded = chart.id === player.chart;
+          button.classList.toggle("active", loaded);
+          button.classList.toggle("edited", loaded && edited);
         });
       }
 
       for (const chip of Array.from(block.stackRow.children) as HTMLButtonElement[]) {
         chip.classList.toggle("active", chip.dataset.stack === chrome.libraryStack);
+        chip.classList.toggle("edited", edited && chip.dataset.stack === from?.stack);
       }
     }
 
@@ -449,14 +482,14 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
     if (document.activeElement !== weightSlider) {
       weightSlider.value = String(Math.round(chrome.brush * 100));
     }
-    if (!handlesSynced) {
-      // The restored window is only known once the engine has booted.
-      cut.value = chrome.window.low.toFixed(1);
-      top.value = chrome.window.high.toFixed(1);
-      handlesSynced = true;
-    }
-    span.style.left = `${chrome.window.low}%`;
-    span.style.right = `${100 - chrome.window.high}%`;
+    // The stops move with what the slider is cutting, so they are read back
+    // whenever the range does - which is whenever anything at all has happened.
+    stops = sliderStops();
+    chrome.window = { low: player.sliderLow, high: player.sliderHigh };
+    cut.value = String(player.sliderLow);
+    top.value = String(player.sliderHigh);
+    span.style.left = `${player.sliderLow}%`;
+    span.style.right = `${100 - player.sliderHigh}%`;
 
     if (document.activeElement !== percent) percent.value = player.percent.toFixed(1);
     if (!editing) notation.value = player.notation;
@@ -529,7 +562,9 @@ function handle(className: string, label: string): HTMLInputElement {
   input.type = "range";
   input.min = "0";
   input.max = "100";
-  input.step = "0.5";
+  // Not a fixed step: the places worth stopping are the edges of the matrix
+  // cells, and those are not evenly spaced. The handlers snap to them.
+  input.step = "any";
   input.className = `slider ${className}`;
   input.setAttribute("aria-label", label);
   return input;

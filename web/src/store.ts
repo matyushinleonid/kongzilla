@@ -39,7 +39,6 @@ export interface Chrome {
   /** Which stack depth the library chips are showing. */
   libraryStack: string;
   /** The chart the range came from, while it still is that chart. */
-  libraryChart: { id: string; notation: string } | null;
   /**
    * Whether a chart arrives without the hands whose EV is zero.
    *
@@ -54,6 +53,21 @@ export interface Chrome {
   dealtBucket: { board: string; axis: string; group: string } | null;
   /** The statistic whose hands are open over the matrix for painting. */
   editing: number | null;
+  /**
+   * The hand the reader is pointing at, wherever they are pointing from.
+   *
+   * One notion shared by every panel rather than one per panel: the matrix, the
+   * suit breakdown, the equity matrix and the equity graph all speak about
+   * hands, and pointing at a hand in any of them is the same question - what is
+   * this hand, here, on this board. Whoever the pointer is over sets it, and
+   * everybody else lights the part of themselves that is about it.
+   *
+   * The cell and the combination are kept apart because they are different
+   * questions: a cell is up to sixteen hands and answers in shares, and one
+   * combination answers yes or no.
+   */
+  peekClass: number | null;
+  peekCombo: number | null;
   /** The cell whose suit breakdown is showing, and whether it is pinned open. */
   suitPeek: number | null;
   /**
@@ -97,11 +111,12 @@ export const chrome: Chrome = {
   hovered: null,
   showCombos: false,
   libraryStack: "",
-  libraryChart: null,
   libraryNoZeroEv: false,
   flopsOpen: true,
   dealtBucket: null,
   editing: null,
+  peekClass: null,
+  peekCombo: null,
   suitPeek: null,
   dealing: null,
   output: "groups",
@@ -156,10 +171,6 @@ export async function boot(wasmSource?: BufferSource): Promise<void> {
       const view: View = JSON.parse(engine.view());
       chrome.boardCards = [...view.boardCards];
       chrome.visible = view.boardCards.length;
-      // A saved range is not necessarily a band of the ranking, but leaving the
-      // handles spanning everything next to a narrow range reads as a bug. Sit
-      // them on the range's realised size instead.
-      chrome.window = { low: 0, high: view.players[view.active].percent };
       restored = true;
     } catch {
       // A malformed link should not stop the app from starting.
@@ -172,10 +183,6 @@ export async function boot(wasmSource?: BufferSource): Promise<void> {
     // it; the switch in the panel is the reader's to press.
     engine.loadLibrary("mtt-100bb-open-btn", false);
     chrome.libraryStack = "100bb";
-    chrome.libraryChart = {
-      id: "mtt-100bb-open-btn",
-      notation: (JSON.parse(engine.view()) as View).players[0].notation,
-    };
   }
   refresh();
 }
@@ -287,9 +294,33 @@ export function statCombos(stat: number): Array<[number, string, string]> {
   return JSON.parse(engine.statCombos(stat));
 }
 
+/**
+ * Which statistics one hand is about, as ones and noughts.
+ *
+ * The same reading [`peekStats`] takes, for a hand the pointer is nowhere near:
+ * the equity table asks it of every row.
+ */
+export function comboStats(combo: number): Float32Array {
+  return engine.comboStats(combo);
+}
+
+/** What colour one hand was painted, as a palette key or "none". */
+export function comboColour(combo: number): string {
+  return engine.comboColour(combo);
+}
+
 /** The hands in one matrix cell, with their colours. */
 export function comboColours(cell: number): Array<[number, string, string]> {
   return JSON.parse(engine.comboColours(cell));
+}
+
+/**
+ * Where the top-of-the-range slider has anywhere to stop, as shares.
+ *
+ * Empty before a flop, and empty when there is nothing to measure against.
+ */
+export function equitySteps(): Float32Array {
+  return engine.equitySteps();
 }
 
 /** Per-cell matrix weights for the hovered statistic. */
@@ -353,6 +384,17 @@ export function hotness(): HotCard[] | null {
   return JSON.parse(engine.hotness());
 }
 
+/**
+ * Where the range slider's handles have somewhere to stop.
+ *
+ * The edges of the matrix cells, in the order the slider walks them. Between
+ * two of them there is nothing to choose - the same hands are selected either
+ * way - so this is what the handles snap to.
+ */
+export function sliderStops(): Float32Array {
+  return engine.sliderStops();
+}
+
 /** Equity and weight per combo index, for the equity matrix and graph. */
 export function equityByCombo(): {
   equity: Float32Array;
@@ -385,6 +427,33 @@ export function describeCombo(combo: number): string[] {
   return JSON.parse(engine.describeCombo(combo));
 }
 
+/**
+ * Which statistics the hand under the pointer is about, as a share of it.
+ *
+ * `null` when nothing is being pointed at, or when the board and the dead cards
+ * have taken every combination of it away - which is not the same as a hand
+ * that makes nothing, and says so by lighting nothing at all.
+ */
+export function peekStats(): Float32Array | null {
+  if (chrome.peekCombo !== null) {
+    const shares = engine.comboStats(chrome.peekCombo);
+    return shares.length > 0 ? shares : null;
+  }
+  if (chrome.peekClass !== null) {
+    const shares = engine.classStats(chrome.peekClass);
+    return shares.length > 0 ? shares : null;
+  }
+  return null;
+}
+
+/** Points at a hand, and tells everyone - unless it is the one already pointed at. */
+export function peekAt(klass: number | null, combo: number | null = null): void {
+  if (chrome.peekClass === klass && chrome.peekCombo === combo) return;
+  chrome.peekClass = klass;
+  chrome.peekCombo = combo;
+  repaint();
+}
+
 /** The individual combos of one matrix cell. */
 export function classCombos(index: number): ClassCombo[] {
   return JSON.parse(engine.classCombos(index));
@@ -410,6 +479,11 @@ export function runPreflop(): void {
   }, 0);
 }
 
+/** Whether the pass over the flops has left per-hand equity standing. */
+export function preflopEquityReady(): boolean {
+  return engine.preflopEquityReady();
+}
+
 /**
  * How many hand-flop pairs a pass would have to classify.
  *
@@ -418,7 +492,11 @@ export function runPreflop(): void {
  */
 export function preflopWork(): number {
   const view = state();
-  return view.liveCombos * view.filteredFlops;
+  // The per-hand equity rides along with the pass when there are two ranges and
+  // no board, and it is not free - so the panel that decides whether to run a
+  // pass unasked counts it too. A hand evaluated and a hand classified cost
+  // about the same, measured on the same machine, so they simply add up.
+  return view.liveCombos * view.filteredFlops + engine.preflopEquityWork();
 }
 
 /**
@@ -483,7 +561,22 @@ export function restore(json: string): void {
   });
 }
 
+/**
+ * How many times the session has actually changed.
+ *
+ * Repaints happen for two reasons: something changed, or the pointer moved.
+ * The second kind is far more frequent and rebuilds nothing new, so a panel
+ * that is expensive to build can compare this with what it last built from and
+ * skip the work. It moves on every refresh and never otherwise.
+ */
+let changes = 0;
+
+export function revision(): number {
+  return changes;
+}
+
 function refresh(): void {
+  changes += 1;
   view = JSON.parse(engine.view());
   // A pass over the flops survives anything that does not change what it was a
   // pass over. Ticking a statistic is the thing a reader does most often right

@@ -238,6 +238,121 @@ impl Range {
         Self::top_percent(high, ranking).without_top_percent(low, ranking)
     }
 
+    /// What share of the deck sits in the matrix cells this range touches.
+    ///
+    /// Not [`Range::percent_of_deck`], which weighs each hand by how much of it
+    /// is in: a chart that raises AJo half the time still touches all twelve of
+    /// them. This is the figure the slider parks on, because the slider moves
+    /// whole cells.
+    pub fn cell_percent(&self) -> f64 {
+        let held = self.class_combo_counts();
+        let mut cells = 0.0;
+        for class in HandClass::all() {
+            if held[class.index() as usize] > 0.0 {
+                cells += f64::from(class.combo_count());
+            }
+        }
+        cells / NUM_COMBOS as f64 * 100.0
+    }
+
+    /// The cells in the order the slider walks them, each flagged as one this
+    /// range holds.
+    ///
+    /// This range's own cells first, strongest first by `ranking`, then every
+    /// cell it does not hold, also strongest first. An empty range leaves the
+    /// plain ranking, which is what a reader building a range out of an empty
+    /// matrix wants.
+    pub fn slider_order(&self, ranking: Ranking) -> Vec<(HandClass, bool)> {
+        let held = self.class_combo_counts();
+        let mine = |class: &HandClass| held[class.index() as usize] > 0.0;
+        let order = ranking.order();
+        order
+            .iter()
+            .filter(|class| mine(class))
+            .chain(order.iter().filter(|class| !mine(class)))
+            .map(|class| (*class, mine(class)))
+            .collect()
+    }
+
+    /// Where the slider has somewhere to stop, in percent of the deck.
+    ///
+    /// It moves whole cells, so a position between two of them is one it cannot
+    /// express: a handle left there shows one thing and selects another, and a
+    /// nudge that lands there moves nothing at all. The edges of the cells are
+    /// the stops, and the handles snap to them.
+    pub fn slider_stops(&self, ranking: Ranking) -> Vec<f32> {
+        let deck = NUM_COMBOS as f64;
+        let mut stops = Vec::with_capacity(NUM_CLASSES + 1);
+        let mut at = 0.0f64;
+        stops.push(0.0);
+        for (class, _) in self.slider_order(ranking) {
+            at += f64::from(class.combo_count());
+            stops.push((at / deck * 100.0) as f32);
+        }
+        stops
+    }
+
+    /// The band `from`..`to` of the ordering this range defines.
+    ///
+    /// This is what the slider cuts once the matrix holds something. Cutting
+    /// the deck instead is what made the slider useless on a chart: the handles
+    /// would park at the chart's width, and one press of an arrow key replaced
+    /// it with a plain percentile band of the ranking - a hundred and thirty
+    /// hands different, for a move of half a point.
+    ///
+    /// So the ordering is the chart's: its own cells first, strongest first by
+    /// `ranking`, and then every cell it does not hold, also strongest first.
+    /// The chart is then exactly the band from nought to its own width, which
+    /// is where the handles park; one stop either side of that is one matrix
+    /// cell, taken off the bottom of the chart or added from the best of what
+    /// it folds. Both ends still mean what they always meant - nought leaves
+    /// the matrix empty and a hundred leaves no cell out of it.
+    ///
+    /// Cells the range holds keep the weight they had, so widening a chart
+    /// never turns its mixed cells into pure ones. Cells from outside it arrive
+    /// whole, there being nothing else they could arrive as.
+    ///
+    /// An empty range defines no ordering of its own, and this is then the
+    /// plain [`Range::window`] over the ranking - which is the right answer for
+    /// a reader building a range out of an empty matrix.
+    pub fn window_of(&self, from: f64, to: f64, ranking: Ranking) -> Self {
+        let (low, high) = if from <= to { (from, to) } else { (to, from) };
+        let deck = f64::from(NUM_COMBOS as u32);
+        let ceiling = (high / 100.0) * deck;
+        let floor = (low / 100.0) * deck;
+        // A handle sitting exactly on a stop must take the cell that stop is
+        // the edge of. The stop reached it as a single-precision percentage, so
+        // "exactly" is a thousandth of a hand out either way - room the smallest
+        // cell, at four hands, has no trouble clearing.
+        let slack = 1e-6 * deck;
+        let mut range = Self::empty();
+        let mut used = 0.0f64;
+        // Whether the cells so far are all inside the part the red handle takes
+        // off. The first cell too big to fit under it ends that part, which is
+        // the same "at or below the request" rule the blue handle follows.
+        let mut trimming = true;
+        for (class, mine) in self.slider_order(ranking) {
+            let size = f64::from(class.combo_count());
+            if used + size > ceiling + slack {
+                break;
+            }
+            if trimming && used + size <= floor + slack {
+                used += size;
+                continue;
+            }
+            trimming = false;
+            used += size;
+            if mine {
+                for combo in class.combos() {
+                    range.set(combo, self.get(combo));
+                }
+            } else {
+                range.set_class(class, 1.0);
+            }
+        }
+        range
+    }
+
     /// Removes the strongest `percent` of all starting hands from this range.
     ///
     /// This is the negative slider: `top_percent(20)` minus `top_percent(5)` is a
@@ -485,6 +600,75 @@ mod tests {
         // The handles cannot overtake each other.
         assert_eq!(band, Range::window(20.0, 5.0, Ranking::EquityVsRandom));
         assert!(Range::window(30.0, 30.0, Ranking::EquityVsRandom).is_empty());
+    }
+
+    #[test]
+    fn the_handles_park_on_what_the_matrix_holds() {
+        // Every range is exactly the band from nought to its own width in its
+        // own ordering, so parking is exact rather than a best guess.
+        let chart = Range::parse("22+,A2s+,K9s+,QTs+,JTs,A8o+,KJo+").unwrap();
+        for ranking in Ranking::ALL {
+            let width = chart.cell_percent();
+            assert_eq!(chart.window_of(0.0, width, ranking), chart, "{ranking:?}");
+        }
+
+        // Nought leaves the matrix empty; a hundred leaves no cell out of it.
+        let wide = chart.window_of(0.0, 100.0, Ranking::ChenFormula);
+        assert!(chart.window_of(0.0, 0.0, Ranking::ChenFormula).is_empty());
+        assert_eq!(wide.cell_percent(), 100.0);
+        // And what it already had it kept, mixed cells and all.
+        for combo in Combo::all() {
+            if chart.get(combo) > 0.0 {
+                assert_eq!(wide.get(combo), chart.get(combo), "{combo}");
+            }
+        }
+
+        // An empty matrix has no ordering of its own, so the slider is the
+        // plain one it has always been.
+        for (low, high) in [(0.0, 20.0), (5.0, 40.0), (0.0, 100.0)] {
+            assert_eq!(
+                Range::empty().window_of(low, high, Ranking::ChenFormula),
+                Range::window(low, high, Ranking::ChenFormula),
+            );
+        }
+    }
+
+    #[test]
+    fn one_stop_of_the_slider_is_one_matrix_cell() {
+        // The complaint this answers: parked on a chart, the smallest touch of
+        // the slider swapped it for a percentile band of the ranking - over a
+        // hundred hands different, for a move of half a point.
+        let chart = Range::parse("22+,A2s+,K9s+,QTs+,JTs,A8o+,KJo+").unwrap();
+        let stops = chart.slider_stops(Ranking::ChenFormula);
+        let width = chart.cell_percent();
+        let here = stops
+            .iter()
+            .position(|stop| f64::from(*stop) >= width - 1e-6)
+            .expect("the width is a stop");
+
+        let apart = |other: &Range| {
+            chart.difference(other).combo_count() + other.difference(&chart).combo_count()
+        };
+        for (at, what) in [(here + 1, "one cell added"), (here - 1, "one cell dropped")] {
+            let moved = chart.window_of(0.0, f64::from(stops[at]), Ranking::ChenFormula);
+            let off = apart(&moved);
+            assert!(off > 0.0, "{what}: nothing moved");
+            assert!(
+                off <= 12.0,
+                "{what}: {off} hands moved, which is not one cell"
+            );
+        }
+
+        // Every stop is somewhere the slider can actually express: the band up
+        // to it ends exactly there.
+        for stop in stops.iter().copied() {
+            let band = chart.window_of(0.0, f64::from(stop), Ranking::ChenFormula);
+            assert!(
+                (band.cell_percent() - f64::from(stop)).abs() < 0.01,
+                "a handle on {stop} selects {} of the deck",
+                band.cell_percent()
+            );
+        }
     }
 
     #[test]

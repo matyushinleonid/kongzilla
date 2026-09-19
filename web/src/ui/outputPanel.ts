@@ -10,13 +10,20 @@
 import {
   chrome,
   classLabels,
+  comboColour,
+  comboStats,
+  colourSlot,
   describeCombo,
   equityByCombo,
   hotness,
+  markColour,
   mutate,
   opponentEquityByCombo,
+  peekAt,
   overlap,
   palette,
+  preflopEquityReady,
+  revision,
   repaint,
   setVersusSeat,
   state,
@@ -34,16 +41,27 @@ type Tab = typeof chrome.output;
  * about colours and the overlap about statistics, and a control that changed
  * nothing on them would be a control that taught the reader it does nothing.
  */
-const TABS: Array<[Tab, string, string, boolean]> = [
-  ["groups", "Groups", "How much of the range sits in each colour", false],
-  ["overlap", "Overlap", "How often each statistic comes with each other one", false],
-  ["eq-matrix", "Eq. matrix", "Equity of every hand in the range", true],
-  ["eq-graph", "Eq. graph", "The range's equity, strongest hand first", true],
-  ["hotness", "Hotness", "How each remaining card changes the equity", true],
+const TABS: Array<[Tab, string, string, boolean, boolean]> = [
+  ["groups", "Groups", "How much of the range sits in each colour", false, true],
+  ["overlap", "Overlap", "How often each statistic comes with each other one", false, false],
+  ["eq-matrix", "Eq. matrix", "Equity of every hand in the range", true, true],
+  ["eq-graph", "Eq. graph", "The range's equity, strongest hand first", true, true],
+  ["hotness", "Hotness", "How each remaining card changes the equity", true, false],
 ];
 
 /** Which views read the chosen opponent. */
 const MEASURED = new Set<Tab>(TABS.filter(([, , , against]) => against).map(([key]) => key));
+
+/**
+ * Which views have something to say before a flop is dealt.
+ *
+ * The two equity ones do, now that a preflop pass works them out - so the
+ * control that picks who they are measured against belongs there too. Hotness
+ * needs a card still to come, so it stays behind a board.
+ */
+const BEFORE_THE_FLOP = new Set<Tab>(
+  TABS.filter(([, , , , preflop]) => preflop).map(([key]) => key),
+);
 
 export function createOutputPanel(): { element: HTMLElement; render: () => void } {
   const panel = document.createElement("section");
@@ -101,7 +119,10 @@ export function createOutputPanel(): { element: HTMLElement; render: () => void 
     // Only where it changes what is drawn. Preflop there is no board to be
     // measured on, and the two views that read it are empty anyway.
     const others = seen.players.map((_, index) => index).filter((index) => index !== seen.active);
-    versusButton.hidden = seen.board === "" || others.length === 0 || !MEASURED.has(chrome.output);
+    versusButton.hidden =
+      others.length === 0 ||
+      !MEASURED.has(chrome.output) ||
+      (seen.board === "" && !BEFORE_THE_FLOP.has(chrome.output));
     if (!versusButton.hidden) {
       const other = seen.versusSeat === null ? null : seen.players[seen.versusSeat];
       const named = other ? seatName(other) : null;
@@ -115,10 +136,45 @@ export function createOutputPanel(): { element: HTMLElement; render: () => void 
           : "The equity views measure against the other range. Press to name it.";
     }
     buttons.forEach((button, key) => button.classList.toggle("active", key === chrome.output));
-    body.replaceChildren(...view());
+
+    // Rebuilding the view is the expensive part of a repaint - the table under
+    // the equity graph runs to hundreds of rows - and most repaints have
+    // nothing new in them: the pointer crossed a row, and all that changed is
+    // which hand is being pointed at.
+    //
+    // Rebuilding for that was worse than slow. The table scrolls, a fresh one
+    // comes in scrolled to the top, and a wheel that moves the rows under a
+    // still pointer sets off a repaint per row it crosses - so scrolling it
+    // fought back. Pointing at a hand now moves a class and nothing else.
+    const built = `${chrome.output}/${revision()}/${chrome.showCombos}/${chrome.overlapAxes}/${
+      chrome.preflop === null ? "none" : "pass"
+    }/${chrome.preflopRunning}`;
+    if (built !== lastBuilt) {
+      lastBuilt = built;
+      body.replaceChildren(...view());
+    }
+    markPeek(body);
   };
 
   return { element: panel, render };
+}
+
+/** What the last render built from, so an unchanged view is left alone. */
+let lastBuilt = "";
+
+/**
+ * Marks the hand being pointed at, without rebuilding anything.
+ *
+ * The one part of these views that changes as the pointer moves, so it is the
+ * one part a pointer move is allowed to touch.
+ */
+function markPeek(body: HTMLElement): void {
+  for (const cell of body.querySelectorAll<HTMLElement>(".eq-cell")) {
+    cell.classList.toggle("peek", chrome.peekClass === Number(cell.dataset.klass));
+  }
+  for (const row of body.querySelectorAll<HTMLElement>(".eq-row[data-combo]")) {
+    row.classList.toggle("peek", chrome.peekCombo === Number(row.dataset.combo));
+  }
 }
 
 function view(): Node[] {
@@ -134,6 +190,36 @@ function view(): Node[] {
     case "hotness":
       return hotnessView();
   }
+}
+
+/**
+ * What the two equity views show before there is a board.
+ *
+ * With cards down, equity is enumerated: every run-out, exactly, in a few tens
+ * of milliseconds, so it happens on every redraw and nobody is asked anything.
+ * With no board there are 2.6 million run-outs, so the answer is sampled - a
+ * second of work, which is too much to spend on a redraw.
+ *
+ * It is not a second button, though. It is the same question the statistics
+ * panel already asks of the same flops, over the same ticked groups, so it is
+ * answered by the same pass: run that one and these fill in.
+ *
+ * Returns `null` once a pass is standing, which is the caller's cue to draw it.
+ */
+function preflopEquityGate(): Node[] | null {
+  if (state().board !== "") return null;
+  if (preflopEquityReady()) return null;
+  if (chrome.preflopRunning) return [note("Working through the flops…")];
+  if (state().players.length < 2) {
+    return [
+      note("Needs something to measure against: a hand in the dead cards, or both seats filled."),
+    ];
+  }
+  return [
+    note(
+      "Before the flop this comes from the pass over flops — run it in the statistics panel and it works out every hand's equity too, over whichever flop groups are ticked.",
+    ),
+  ];
 }
 
 function note(text: string): HTMLElement {
@@ -296,6 +382,8 @@ function comboClass(combo: number): number {
 }
 
 function equityMatrixView(): Node[] {
+  const gate = preflopEquityGate();
+  if (gate) return gate;
   const data = perClassEquity();
   if (!data)
     return [
@@ -309,6 +397,11 @@ function equityMatrixView(): Node[] {
   for (let index = 0; index < 169; index += 1) {
     const cell = document.createElement("div");
     cell.className = "eq-cell";
+    cell.dataset.klass = String(index);
+    cell.addEventListener("pointerenter", () => peekAt(index));
+    cell.addEventListener("pointerleave", () => {
+      if (chrome.peekClass === index) peekAt(null);
+    });
     // Laid out like the range matrix and labelled like it, so a hand is found
     // in the same place by the same name; the number goes in the corner where
     // the combination count goes over there.
@@ -366,6 +459,8 @@ function curveOf(data: {
 }
 
 function equityGraphView(): Node[] {
+  const gate = preflopEquityGate();
+  if (gate) return gate;
   const data = equityByCombo();
   if (!data)
     return [
@@ -480,6 +575,9 @@ function equityGraphView(): Node[] {
     marker.setAttribute("x1", starts[index].toFixed(2));
     marker.setAttribute("x2", starts[index].toFixed(2));
     // Say what the hand actually is, not just which two cards it holds.
+    // The hand under the cursor here is the hand under the cursor everywhere:
+    // the matrix outlines it and the statistics light what it makes.
+    peekAt(COMBO_CLASS[point.combo] ?? null, point.combo);
     const what = describeCombo(point.combo);
     readout.replaceChildren(
       pips(comboName(point.combo)),
@@ -493,6 +591,7 @@ function equityGraphView(): Node[] {
   });
   svg.addEventListener("pointerleave", () => {
     marker.setAttribute("visibility", "hidden");
+    peekAt(null);
     rest();
   });
 
@@ -519,6 +618,10 @@ function equityGraphView(): Node[] {
     );
   }
 
+  // The markers down the statistics panel, read once rather than per row: they
+  // are what says which colour a category carries.
+  const marks = state().marks;
+
   // Under the curve, every hand it is made of. The graph shows the shape; the
   // table is where you look up the hand you actually hold.
   const table = document.createElement("div");
@@ -536,8 +639,15 @@ function equityGraphView(): Node[] {
     rank.className = "num";
     rank.textContent = `${place + 1}.`;
     const hand = document.createElement("span");
+    hand.className = "eq-hand";
     pips(comboName(point.combo), hand);
     hand.title = describeCombo(point.combo).join(", ");
+    // Washed with the colours of the categories it belongs to, so the table
+    // reads as the same range rather than as a list of strangers. Colours,
+    // plural: a hand can be top pair and a flushdraw at once, and if those two
+    // are painted differently the reader decided two things about it - so the
+    // row is shared between them rather than picking a winner.
+    wash(hand, marksOf(point.combo, marks));
     const equity = document.createElement("span");
     equity.className = "num";
     equity.textContent = `${(point.equity * 100).toFixed(3)}`;
@@ -548,10 +658,60 @@ function equityGraphView(): Node[] {
     tie.className = "num";
     tie.textContent = `${(point.tie * 100).toFixed(3)}`;
     row.append(rank, hand, equity, win, tie);
+    row.dataset.combo = String(point.combo);
+    row.addEventListener("pointerenter", () =>
+      peekAt(COMBO_CLASS[point.combo] ?? null, point.combo),
+    );
+    row.addEventListener("pointerleave", () => {
+      if (chrome.peekCombo === point.combo) peekAt(null);
+    });
     table.append(row);
   });
 
   return [svg, readout, legend, table];
+}
+
+/**
+ * The colours of the painted categories one hand belongs to.
+ *
+ * In the panel's own order, and without repeats: two categories painted the
+ * same colour are one colour to look at. A category whose hands disagree - a
+ * gear - carries no colour of its own, so what is left for a hand in one is the
+ * colour it was painted itself, which is the fallback below.
+ */
+function marksOf(combo: number, marks: string[]): string[] {
+  const shares = comboStats(combo);
+  const found: string[] = [];
+  for (const definition of statDefs) {
+    if ((shares[definition.index] ?? 0) <= 0) continue;
+    const mark = marks[definition.index];
+    if (!mark || mark === "none" || mark === "mixed") continue;
+    if (!found.includes(mark)) found.push(mark);
+  }
+  if (found.length === 0) {
+    const own = comboColour(combo);
+    if (own !== "none") found.push(own);
+  }
+  return found;
+}
+
+/** Paints a strip of one colour, or a band each where there are several. */
+function wash(element: HTMLElement, colours: string[]): void {
+  element.dataset.colours = String(colours.length);
+  if (colours.length === 0) {
+    element.style.removeProperty("background");
+    return;
+  }
+  if (colours.length === 1) {
+    markColour(element, colours[0]);
+    return;
+  }
+  const step = 100 / colours.length;
+  const bands = colours.map(
+    (colour, at) =>
+      `color-mix(in srgb, var(--group-${colourSlot(colour)}) 26%, transparent) ${(at * step).toFixed(2)}% ${((at + 1) * step).toFixed(2)}%`,
+  );
+  element.style.background = `linear-gradient(90deg, ${bands.join(", ")})`;
 }
 
 /** One swatch and label in the graph's legend. */

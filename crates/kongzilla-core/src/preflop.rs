@@ -68,21 +68,28 @@ impl PreflopBreakdown {
     }
 }
 
-/// Classifies `range` against the flops the dead cards and `filter` leave.
+/// Classifies `range` against the flops `off_the_deck` and `filter` leave.
+///
+/// Two card sets, because they answer two questions. A flop cannot use a card
+/// anybody is holding, this range's owner included - that is `off_the_deck`.
+/// A hand of this range cannot use a card somebody *else* is holding, but its
+/// own cards are the whole point of it - that is `held_elsewhere`. Passing one
+/// set for both is how a seat holding a hand came to have no hands at all.
 ///
 /// `hit` is the set of statistics that count as having hit; pass
 /// [`StatMask::EMPTY`] when nothing is marked. An empty `filter` is every flop,
 /// which is the ordinary pass.
 pub fn over_flops(
     range: &Range,
-    dead: CardSet,
+    off_the_deck: CardSet,
+    held_elsewhere: CardSet,
     options: ClassifyOptions,
     hit: StatMask,
     filter: FlopFilter,
 ) -> PreflopBreakdown {
     let hands: Vec<(Combo, f64)> = range
         .iter()
-        .filter(|(combo, _)| !combo.mask().intersects(dead))
+        .filter(|(combo, _)| !combo.mask().intersects(held_elsewhere))
         .map(|(combo, weight)| (combo, f64::from(weight)))
         .collect();
 
@@ -95,7 +102,7 @@ pub fn over_flops(
     if !hands.is_empty() {
         for flop in Board::all_flops() {
             let board_mask = flop.mask();
-            if board_mask.intersects(dead) || !filter.matches(&flop) {
+            if board_mask.intersects(off_the_deck) || !filter.matches(&flop) {
                 continue;
             }
             flops += 1;
@@ -154,6 +161,7 @@ mod tests {
         let result = over_flops(
             &range,
             CardSet::EMPTY,
+            CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,
             FlopFilter::EVERYTHING,
@@ -173,6 +181,7 @@ mod tests {
         let range = Range::parse("77").unwrap();
         let result = over_flops(
             &range,
+            CardSet::EMPTY,
             CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,
@@ -194,6 +203,7 @@ mod tests {
         let range = Range::parse("AKo").unwrap();
         let result = over_flops(
             &range,
+            CardSet::EMPTY,
             CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,
@@ -217,6 +227,7 @@ mod tests {
         let none = over_flops(
             &range,
             CardSet::EMPTY,
+            CardSet::EMPTY,
             options,
             StatMask::EMPTY,
             FlopFilter::EVERYTHING,
@@ -226,6 +237,7 @@ mod tests {
         let marked: StatMask = [StatId::TOP_PAIR, StatId::FLUSH_DRAW].into_iter().collect();
         let some = over_flops(
             &range,
+            CardSet::EMPTY,
             CardSet::EMPTY,
             options,
             marked,
@@ -239,6 +251,7 @@ mod tests {
             .collect();
         let all = over_flops(
             &range,
+            CardSet::EMPTY,
             CardSet::EMPTY,
             options,
             everything,
@@ -254,6 +267,7 @@ mod tests {
         let result = over_flops(
             &range,
             dead,
+            dead,
             ClassifyOptions::default(),
             StatMask::EMPTY,
             FlopFilter::EVERYTHING,
@@ -267,6 +281,7 @@ mod tests {
     fn an_empty_range_produces_nothing() {
         let result = over_flops(
             &Range::empty(),
+            CardSet::EMPTY,
             CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,

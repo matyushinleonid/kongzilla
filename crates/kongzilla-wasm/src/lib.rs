@@ -66,6 +66,13 @@ struct PlayerView {
     percent: f64,
     /// Mean weight per matrix cell, for the seat's thumbnail.
     class_weights: Vec<f32>,
+    /// Where the seat's range slider sits, in percent of the deck.
+    slider_low: f64,
+    slider_high: f64,
+    /// The library chart this seat was loaded from, and whether what is in the
+    /// matrix is still that chart rather than an edit of it.
+    chart: Option<String>,
+    chart_edited: bool,
 }
 
 /// One combination of one matrix cell, as the popup draws it.
@@ -673,6 +680,28 @@ impl Engine {
         }
     }
 
+    /// Where the top-of-the-range slider has anywhere to stop, as shares.
+    #[wasm_bindgen(js_name = equitySteps)]
+    pub fn equity_steps(&self) -> Vec<f32> {
+        self.session.equity_steps()
+    }
+
+    /// Which statistics one matrix cell is about, as a share of the cell.
+    ///
+    /// Empty when the board and the dead cards have taken every combination of
+    /// it away, which is the one case with no answer rather than a row of
+    /// noughts.
+    #[wasm_bindgen(js_name = classStats)]
+    pub fn class_stats(&self, index: u8) -> Vec<f32> {
+        self.session.class_stats(HandClass::from_index(index))
+    }
+
+    /// The same for one combination, where every share is nought or one.
+    #[wasm_bindgen(js_name = comboStats)]
+    pub fn combo_stats(&self, index: u16) -> Vec<f32> {
+        self.session.combo_stats(Combo::from_index(index))
+    }
+
     /// The individual combos of one matrix cell, as JSON.
     #[wasm_bindgen(js_name = classCombos)]
     pub fn class_combos(&self, class: u8) -> String {
@@ -723,6 +752,30 @@ impl Engine {
     #[wasm_bindgen(js_name = preflopCached)]
     pub fn preflop_cached(&self) -> Option<String> {
         self.session.preflop_cached().map(|pass| to_json(&pass))
+    }
+
+    /// Where the range slider's handles have somewhere to stop.
+    ///
+    /// The edges of the matrix cells, in the order the slider walks them, as
+    /// percentages of the deck. Between two of them there is nothing to choose.
+    #[wasm_bindgen(js_name = sliderStops)]
+    pub fn slider_stops(&self) -> Vec<f32> {
+        self.session.slider_stops()
+    }
+
+    /// Whether the pass over the flops has left per-hand equity standing.
+    #[wasm_bindgen(js_name = preflopEquityReady)]
+    pub fn preflop_equity_ready(&self) -> bool {
+        self.session.preflop_equity_ready()
+    }
+
+    /// How many hands the equity riding along with a pass would evaluate.
+    ///
+    /// Nought when there is nothing to measure against, which is how the panel
+    /// knows the pass is only a pass.
+    #[wasm_bindgen(js_name = preflopEquityWork)]
+    pub fn preflop_equity_work(&self) -> f64 {
+        self.session.preflop_equity_work()
     }
 
     /// Adds or removes one group of flops from what a pass looks at.
@@ -838,6 +891,13 @@ impl Engine {
                     combos: p.range.combo_count(),
                     percent: p.range.percent_of_deck() * 100.0,
                     class_weights: p.range.class_weights().to_vec(),
+                    slider_low: p.slider.low,
+                    slider_high: p.slider.high,
+                    chart: p.from_library.as_ref().map(|from| from.id.clone()),
+                    chart_edited: p
+                        .from_library
+                        .as_ref()
+                        .is_some_and(|from| from.pristine != p.range),
                 })
                 .collect(),
             class_weights: session.active().range.class_weights().to_vec(),
