@@ -1608,16 +1608,22 @@ describe("a table of three, used", () => {
     card(app.strip, "Ks");
     app.render();
 
-    // A fourth seat, named after its cards and selected.
+    // A fourth seat, named after its cards - and the reader is left where they
+    // were. There is nothing to do to a hand, so being moved onto one would
+    // mean arriving at a dead panel and clicking back out of it.
     expect(state().players).toHaveLength(4);
     expect(state().players[3].hand).toBe("AsKs");
-    expect(state().active).toBe(3);
-    expect(state().editable).toBe(false);
+    expect(state().active).toBe(0);
+    expect(state().editable).toBe(true);
+    expect(app.range.classList.contains("dealt-hand")).toBe(false);
     expect(deal.textContent).toBe("Deal a hand");
 
     // It is marked as a hand rather than left to look like a small range.
     expect(seats2(app)[3].classList.contains("is-hand")).toBe(true);
-    // And the panel has nothing to offer it.
+    // And going to it, the panel has nothing to offer.
+    seats2(app)[3].click();
+    app.render();
+    expect(state().editable).toBe(false);
     expect(app.range.classList.contains("dealt-hand")).toBe(true);
 
     // Its cards are out of the deck for everyone else, which is the whole
@@ -2618,6 +2624,10 @@ describe("equity between two seats", () => {
     app.render();
     card(app.strip, "As");
     card(app.strip, "Ks");
+    app.render();
+    // Dealing leaves the reader on their range; the hand is read by going to it.
+    expect(state().players[state().players.length - 1].hand).toBe("AsKs");
+    Array.from(app.strip.querySelectorAll<HTMLButtonElement>(".seat")).at(-1)!.click();
     app.render();
     expect(state().hand).toBe("AsKs");
 

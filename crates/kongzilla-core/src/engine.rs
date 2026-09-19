@@ -443,12 +443,18 @@ impl Session {
         !self.active().is_hand()
     }
 
-    /// Adds a seat holding one known hand, and selects it.
+    /// Adds a seat holding one known hand, leaving the selection where it is.
     ///
     /// The only way to make one: clicking cells in the matrix builds a range,
     /// however few hands end up in it, because nobody has seen those cards.
     /// Returns `None` when the table is full, or when the hand needs a card
     /// that is already on the board, in the dead cards, or in another hand.
+    ///
+    /// Selecting it would be the obvious thing and is the wrong thing: there is
+    /// nothing to do to a hand, so the reader would arrive at a panel where
+    /// every control is dead and have to click their way back to the range they
+    /// were working on. Dealing a hand is something you do *to* the table while
+    /// working on a range, so the range keeps the floor.
     pub fn add_hand(&mut self, hand: Combo) -> Option<usize> {
         if self.players.len() >= Self::MAX_SEATS {
             return None;
@@ -458,8 +464,7 @@ impl Session {
             return None;
         }
         self.players.push(Player::hand(hand));
-        self.active = self.players.len() - 1;
-        Some(self.active)
+        Some(self.players.len() - 1)
     }
 
     /// The seats taking part in the equity readout, in seat order.
@@ -2362,15 +2367,26 @@ mod tests {
         assert!(session.editable());
         session.set_active(0);
 
-        // A hand is made in one action, named after its cards, and selected.
+        // A hand is made in one action and named after its cards - but the
+        // reader stays on the range they were working on, because a seat with
+        // nothing to edit is not somewhere to be put without asking.
         let hand = Combo::parse("AsKs").unwrap();
         let seat = session.add_hand(hand).expect("room at the table");
-        assert_eq!(session.active_index(), seat);
-        assert_eq!(session.lone_combo(), Some(hand));
+        assert_eq!(
+            session.active_index(),
+            0,
+            "dealing does not move the reader"
+        );
+        assert!(
+            session.editable(),
+            "and leaves them somewhere they can work"
+        );
+        assert_eq!(session.lone_combo_for(seat), Some(hand));
         assert_eq!(session.players()[seat].name, "AsKs");
 
         // There is nothing to do to it. Every way in refuses rather than half
         // working, because half of the seat would then disagree with the rest.
+        session.set_active(seat);
         assert!(!session.editable());
         let before = session.active().range.to_notation();
         session.set_active_range_text("22+").unwrap();
@@ -2407,11 +2423,12 @@ mod tests {
         let hand = Combo::parse("AsKs").unwrap();
         let seat = session.add_hand(hand).unwrap();
 
-        let restored = Session::restore(&session.snapshot()).unwrap();
+        let mut restored = Session::restore(&session.snapshot()).unwrap();
         assert_eq!(restored.lone_combo_for(seat), Some(hand));
         assert_eq!(restored.players()[seat].name, "AsKs");
         // And it is still not editable, which is the part a range that merely
         // looks the same would get wrong.
+        restored.set_active(seat);
         assert!(!restored.editable());
         // Its cards are still out of the deck for the others.
         assert_eq!(restored.dealt_hands(), hand.mask());

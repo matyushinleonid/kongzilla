@@ -141,6 +141,9 @@ describe("the analysis loop", () => {
     // A hand is dealt deliberately, and then there is nothing to edit.
     engine.setRangeText("");
     expect(engine.addHand("AhKh")).toBe(true);
+    // Dealing leaves the reader on the range they were working on, so reading
+    // the hand means going to it.
+    engine.setActive(view(engine).players.length - 1);
     const state = view(engine);
     expect(state.hand).toBe("AhKh");
     expect(state.editable).toBe(false);

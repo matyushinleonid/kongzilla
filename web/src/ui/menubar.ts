@@ -43,6 +43,16 @@ export function createMenuBar(): {
   tagline.className = "tagline";
   tagline.textContent = "Hold'em range analysis";
 
+  // Beside the name rather than among the actions on the right: it is not
+  // something to press while working, it is who made the thing. It goes with
+  // the tagline, and disappears with it when the window is too narrow for
+  // anything but the controls.
+  const byline = document.createElement("a");
+  byline.className = "tagline byline";
+  byline.href = "https://leonid.sh";
+  byline.textContent = "by Leonid Matyushin";
+  byline.title = "The rest of what I build";
+
   const spacer = document.createElement("span");
   spacer.className = "spacer";
 
@@ -174,6 +184,7 @@ export function createMenuBar(): {
     logo,
     brand,
     tagline,
+    byline,
     spacer,
     bdfd,
     theme,

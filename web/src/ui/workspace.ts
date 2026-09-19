@@ -110,13 +110,77 @@ export function createWorkspace(columns: Column[]): { element: HTMLElement; rend
     workspace.append(column.element, gutter(column));
   }
 
+  const fitHeight = () => capPanels(workspace);
+  window.addEventListener("resize", fitHeight);
+
   const render = () => {
     for (const column of columns) {
       workspace.style.setProperty(`--w-${column.key}`, `${chrome.columns[column.key]}px`);
     }
+    fitHeight();
   };
 
   return { element: workspace, render };
+}
+
+/**
+ * Below this there is no point fitting anything to the height.
+ *
+ * A phone is scrolled, and a window three hundred pixels tall has no room to
+ * give a list either way. Fitting is worth doing where the whole tool can
+ * plausibly be seen at once and a panel growing past the edge is a surprise;
+ * on anything smaller the page simply scrolls, which is what a reader expects
+ * there anyway.
+ */
+const FITS_ABOVE = 640;
+
+/**
+ * What cannot be made shorter, whatever the screen.
+ *
+ * The matrix is thirteen rows of cells and the board is a row of cards: neither
+ * has a list to give up, so neither takes the limit. If one of them is already
+ * past the bottom of the window then the page is going to scroll no matter what
+ * the statistics panel does - and capping the panel then is the worst of both,
+ * a list that scrolls inside a page that also scrolls.
+ */
+const UNCAPPED = ".panel-range, .panel-output";
+
+/**
+ * Tells the panels how much height they may take before they have to scroll
+ * inside themselves.
+ *
+ * The statistics panel grows with what the range can make: on an empty board it
+ * is one height and after a flop another, and on a laptop the second one hangs
+ * off the bottom of the screen. Rather than hide rows or shrink them, the panel
+ * is told where the screen ends and lets its own list scroll - so the palette,
+ * the filters and the totals stay put and only the ladder moves.
+ *
+ * Measured rather than guessed at: what is above the workspace is a strip whose
+ * height depends on how many seats there are and how the dead cards wrap.
+ */
+function capPanels(workspace: HTMLElement): void {
+  const stacked = window.innerWidth < STACKS_BELOW;
+  if (stacked || window.innerHeight < FITS_ABOVE) {
+    workspace.style.removeProperty("--panel-max");
+    return;
+  }
+  const top = workspace.getBoundingClientRect().top + window.scrollY;
+  // The workspace's own bottom padding sits below the panels, so it comes out
+  // of the room they have. Read rather than repeated: a number copied from the
+  // stylesheet is a number that goes stale the first time the stylesheet moves.
+  const below = Number.parseFloat(getComputedStyle(workspace).paddingBottom) || 0;
+  const room = window.innerHeight - top - below;
+  // These heights do not depend on the limit, so reading them here cannot set
+  // the limit chasing itself.
+  const fixed = Array.from(workspace.querySelectorAll(UNCAPPED)).reduce(
+    (tallest, panel) => Math.max(tallest, panel.getBoundingClientRect().height),
+    0,
+  );
+  if (room < fixed) {
+    workspace.style.removeProperty("--panel-max");
+    return;
+  }
+  workspace.style.setProperty("--panel-max", `${Math.max(320, Math.floor(room))}px`);
 }
 
 function gutter(column: Column): HTMLElement {

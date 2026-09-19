@@ -324,6 +324,17 @@ body {
   color: var(--ink-faint);
 }
 
+/* Quiet enough to ignore while working, and plainly a link when looked at. */
+.byline {
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+
+.byline:hover,
+.byline:focus-visible {
+  color: var(--ink-soft);
+}
+
 .spacer {
   flex: 1;
 }
@@ -1299,11 +1310,58 @@ body {
 
 /* ----- statistics panel --------------------------------------------------- */
 
+/*
+ * The statistics panel grows with what the range can make, and on a laptop the
+ * grown version hangs off the bottom of the screen. It is told how much room
+ * there is - `--panel-max`, measured by the workspace - and gives the surplus
+ * to its own list rather than to the page.
+ *
+ * The property is only set where fitting makes sense; where it is not, the rule
+ * falls back to no limit at all and the page scrolls as it always did.
+ *
+ * Everything but the ladder stays where it is. The palette, the filters and the
+ * totals are what a reader keeps coming back to, and a panel that scrolled as a
+ * whole would take them off the screen along with the rows.
+ */
+.panel-stats {
+  display: flex;
+  flex-direction: column;
+  max-height: var(--panel-max);
+}
+
 .stats-body {
   background: var(--panel-sunken);
   border: 1px solid var(--line-soft);
   border-radius: 3px;
   padding: 2px 6px 6px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/*
+ * A shadow at whichever edge has more list behind it.
+ *
+ * Overlay scrollbars stay invisible until you are already scrolling, so a list
+ * that has quietly become scrollable looks like a list that ends there. The
+ * panel says which way there is more, and says nothing when there is no more.
+ *
+ * Said in a class rather than with the background-layer trick that usually does
+ * this: the layer meant to cover the shadow at a rested edge does not move with
+ * the content here, so the shadow showed at both ends at once and faintly.
+ */
+.stats-body.more-above {
+  box-shadow: inset 0 7px 5px -5px rgb(0 0 0 / 22%);
+}
+
+.stats-body.more-below {
+  box-shadow: inset 0 -7px 5px -5px rgb(0 0 0 / 22%);
+}
+
+.stats-body.more-above.more-below {
+  box-shadow:
+    inset 0 7px 5px -5px rgb(0 0 0 / 22%),
+    inset 0 -7px 5px -5px rgb(0 0 0 / 22%);
 }
 
 .stat-block + .stat-block {
@@ -1334,9 +1392,13 @@ body {
 /* Right under the palette and in the colour it is about, because it is a
    property of that colour: hidden away it reads as another stray slider, and
    the whole point is that the reader can see what the colour now means. */
+/* The same, and for the same reason: the label is a colour's name, and the
+   names are not all the same length. */
 .pass-row {
   margin-top: 4px;
   padding: 3px 6px;
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr) 40px;
   align-items: center;
   gap: 6px;
   border-radius: 3px;
@@ -1366,7 +1428,6 @@ body {
 }
 
 .pass-value {
-  min-width: 34px;
   text-align: right;
   color: var(--ink-soft);
 }
@@ -1446,33 +1507,6 @@ body {
 .stat-row:hover,
 .stat-row.hovered {
   background: var(--row-hover);
-}
-
-.filter-marks {
-  display: inline-flex;
-  gap: 1px;
-}
-
-.filter-mark {
-  width: 16px;
-  padding: 0;
-  font: inherit;
-  font-size: 9px;
-  line-height: 14px;
-  text-align: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  color: var(--mark-off);
-  cursor: pointer;
-}
-
-.filter-mark:hover {
-  border-color: var(--line);
-}
-
-.filter-mark[hidden] {
-  display: none;
 }
 
 .mark-pass.on {
@@ -1584,16 +1618,22 @@ body {
 
 /* One marker per row: a funnel in the colour its hands carry, or a gear when
    they do not agree on one. */
+/* A fixed box with the glyph centred in it, rather than a box the glyph sizes.
+   A gear is drawn larger than a funnel to stay legible, and if that changed the
+   box, every row below it would shift the moment a category grew one. */
 .filter-mark {
   flex: none;
-  width: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
   padding: 0;
   border: none;
   background: none;
   color: var(--mark, var(--group-0));
   font-size: 11px;
-  line-height: 1.5;
-  text-align: center;
+  line-height: 1;
   cursor: pointer;
 }
 
@@ -1605,10 +1645,8 @@ body {
    legible at 11px next to a funnel, so it gets the room the funnel does not
    need. */
 .filter-mark.mark-mixed {
-  width: 17px;
   color: var(--ink);
   font-size: 14px;
-  line-height: 1.1;
 }
 
 .filter-mark.mark-empty {
@@ -1687,8 +1725,18 @@ body {
   mix-blend-mode: luminosity;
 }
 
+/* Fixed tracks rather than a flexible row.
+   The readout says "40% · 55%+ eq" while dragging and "all" when there is no
+   cut, and the cross beside it comes and goes. In a flexible row the slider
+   absorbs every one of those changes - it was fifty pixels shorter with a cut
+   than without - which moves the track out from under the thumb while the
+   reader is dragging it. Grid tracks are declared, not measured, so the slider
+   keeps its length whatever the text beside it says. */
 .share-row {
   margin-top: 8px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 118px 22px;
+  align-items: center;
   gap: 6px;
 }
 
@@ -1726,7 +1774,6 @@ body {
 }
 
 .share-value {
-  min-width: 78px;
   text-align: right;
   color: var(--ink-soft);
   font-weight: 600;
@@ -2686,6 +2733,9 @@ body.resizing {
   gap: 6px;
   min-height: 0;
   min-width: 0;
+  /* Same bargain as the statistics panel: the board stays where it is and the
+     flop list, which already scrolls, gives up whatever the screen is short. */
+  max-height: var(--panel-max);
 }
 
 .panel-flops {

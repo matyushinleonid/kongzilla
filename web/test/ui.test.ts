@@ -1222,6 +1222,7 @@ describe("the output panel", () => {
     // - which is the level to read the other range against, and needs no second
     // kind of line to say it.
     mutate((engine) => engine.addHand("AsKs"));
+    mutate((engine) => engine.setActive(state().players.length - 1));
     renderAll();
     expect(output.element.querySelectorAll(".eq-graph .curve")).toHaveLength(2);
     // And it is named as the hand it is, not as the seat it sits in. Suits are
@@ -1238,6 +1239,7 @@ describe("the output panel", () => {
     // that hand against that range.
     setRange("22+, A2s+, KJs+, AJo+");
     mutate((engine) => engine.addHand("AsKs"));
+    mutate((engine) => engine.setActive(state().players.length - 1));
     tab("hotness").click();
     renderAll();
 
