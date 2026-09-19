@@ -128,7 +128,7 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
   // on the filter itself; here it belongs to the colour, because the colour is
   // already the thing that says what happens to a group of hands.
   const passRow = document.createElement("div");
-  passRow.className = "row share-row pass-row";
+  passRow.className = "row pass-row";
   const passLabel = document.createElement("span");
   passLabel.className = "field-label";
   const passSlider = document.createElement("input");
@@ -261,6 +261,20 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
   footer.append(streetRow, preflopButton, effective);
 
   panel.append(head, paletteRow, passRow, preflopNote, body, shareRow, footer);
+
+  /**
+   * Marks which edges have more list behind them.
+   *
+   * Called on every render as well as on scroll, because the list changes
+   * height whenever the board or the range does: a panel with nothing more to
+   * show can acquire it without anybody touching the scrollbar.
+   */
+  const markEdges = () => {
+    const hidden = body.scrollHeight - body.clientHeight;
+    body.classList.toggle("more-above", body.scrollTop > 1);
+    body.classList.toggle("more-below", hidden - body.scrollTop > 1);
+  };
+  body.addEventListener("scroll", markEdges, { passive: true });
 
   const render = () => {
     const view = state();
@@ -421,6 +435,8 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
         }),
       );
     }
+
+    markEdges();
   };
 
   return { element: panel, render };
