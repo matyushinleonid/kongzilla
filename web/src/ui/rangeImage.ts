@@ -13,7 +13,7 @@
  * from what is on their screen.
  */
 
-import { chrome, classLabels, state } from "../store";
+import { chrome, classLabels, palette, state } from "../store";
 
 /** How big one cell is drawn, before the device's pixel ratio. */
 const CELL = 46;
@@ -52,7 +52,11 @@ export async function rangeImage(scale = 2): Promise<Blob> {
     token("--paint-suited", "#dcc98a"),
     token("--paint-offsuit", "#e0b3ae"),
   ];
-  const groups = Array.from({ length: 8 }, (_, at) => token(`--group-${at}`, "#c9c9c9"));
+  // Unpainted, then one per palette colour: the picture has exactly the
+  // colours the panel has, however many that is.
+  const groups = Array.from({ length: palette().length + 1 }, (_, at) =>
+    token(`--group-${at}`, "#c9c9c9"),
+  );
 
   context.fillStyle = panel;
   context.fillRect(0, 0, width, height);

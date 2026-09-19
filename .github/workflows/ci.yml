@@ -127,15 +127,27 @@ jobs:
           --set gateway.enabled=true
           --set image.repository=cr.yandex/example/kongzilla
 
-      # The release stamps one version into five files. If a key is renamed and
-      # the stamper stops finding it, that has to fail here, not mid-release.
-      # The beacon is a separate concern, so nginx must not be asked to serve
+      # The beacon is a separate deployment, so nginx must not be asked to serve
       # /api/ - it has no back end and would answer 200 with the app's HTML,
       # which is worse than a clean 404.
       - name: The static server does not answer for the beacon
         run: |
           set -euo pipefail
           grep -q 'location = /api/' web/nginx.conf
+
+      # One image, two things to be: the chart starts the beacon by naming a
+      # binary inside the site's image. If the two ever disagree about where
+      # that binary is, every deployment of the counter breaks - so they are
+      # held to the same path here, where it costs nothing to check.
+      - name: The chart and the image agree where the beacon lives
+        run: |
+          set -euo pipefail
+          path="$(grep -oE '/usr/local/bin/kongzilla-beacon' deploy/helm/kongzilla/templates/beacon.yaml | head -1)"
+          test -n "$path"
+          grep -q "$path" Dockerfile
+
+      # The release stamps one version into five files. If a key is renamed and
+      # the stamper stops finding it, that has to fail here, not mid-release.
 
       - name: The version stamper reaches every file
         run: |
@@ -174,7 +186,51 @@ jobs:
             type=sha,format=long
             type=raw,value=latest
 
-      - name: Build and publish image
+      # Built once and kept here first, so the two roles can be tried before
+      # anything is published. The push below is the same build again and comes
+      # straight out of the cache.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: production
+          load: true
+          tags: kongzilla:ci
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: The one image can be either of the two things
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-site -p 8081:8080 --user 101:101 \
+            --read-only --tmpfs /tmp kongzilla:ci
+          docker run -d --name ci-beacon -p 8082:8080 -p 9091:9090 --user 101:101 \
+            --read-only kongzilla:ci /usr/local/bin/kongzilla-beacon
+          for port in 8081 8082; do
+            for _ in $(seq 30); do
+              curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null && break
+              sleep 1
+            done
+            test "$(curl -fsS "http://127.0.0.1:$port/healthz")" = "ok"
+          done
+          # The site serves the page; the beacon has no page to serve.
+          curl -fsS http://127.0.0.1:8081/ | grep -q "<title>"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8082/)" = "404"
+          # And the beacon counts, on a port the site does not even open. The
+          # referrer comes out of the body, which is the shape a browser sends:
+          # its Referer header is always a page of this site.
+          curl -fsS -X POST -H 'content-type: application/json' \
+            -H 'user-agent: Mozilla/5.0 Safari' \
+            -H 'referer: https://kongzilla.leonid.sh/' \
+            -d '{"name":"pageview","path":"/","referrer":"https://example.org/x"}' \
+            http://127.0.0.1:8082/api/event
+          curl -fsS http://127.0.0.1:9091/metrics \
+            | grep -q 'kongzilla_referrers_total{host="example.org"} 1'
+          docker rm -f ci-site ci-beacon
+
+      - name: Publish image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -187,26 +243,5 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # The beacon rides the same tags as the site it counts, so the two can
-      # never be deployed a version apart.
-      - name: Prepare beacon image metadata
-        id: beacon-metadata
-        uses: docker/metadata-action@v5
-        with:
-          images: cr.yandex/${{ vars.YC_REGISTRY_ID }}/${{ vars.YC_REGISTRY_REPOSITORY }}-beacon
-          tags: |
-            type=sha,format=long
-            type=raw,value=latest
-
-      - name: Build and publish the beacon image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: beacon
-          push: true
-          tags: ${{ steps.beacon-metadata.outputs.tags }}
-          labels: ${{ steps.beacon-metadata.outputs.labels }}
-          provenance: false
-          sbom: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # One image, and the beacon is inside it: there is no second thing to
+      # build, push or keep level with this one.

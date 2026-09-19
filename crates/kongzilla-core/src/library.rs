@@ -190,13 +190,44 @@ pub struct Chart {
     pub size_bb: f32,
     /// Per-cell weight in per mille, so 333 is a third of the time.
     pub(crate) hands: &'static [(&'static str, u16)],
+    /// The hands the chart plays at no gain: their EV is zero.
+    ///
+    /// A solver's range has a fringe it is indifferent about: hands it calls a
+    /// fifth of the time and would break even folding. They are in the chart
+    /// because they are in the solution, and they are named here because a
+    /// reader studying the spot may want the part that actually makes money -
+    /// the hands you would be wrong to fold - without the fringe that only
+    /// balances it.
+    pub(crate) zero_ev: &'static [&'static str],
 }
 
 impl Chart {
     /// Builds the range, each cell at the weight the solver plays it.
     pub fn range(&self) -> Result<Range, ParseError> {
+        self.build(false)
+    }
+
+    /// The same range without the hands whose EV is zero.
+    ///
+    /// What is left is the part of the solution that wins something. It is not
+    /// the solution - folding the fringe is exploitable, which is why the
+    /// solver does not - but it is the part worth learning first, and the
+    /// difference between the two is worth seeing.
+    pub fn range_without_zero_ev(&self) -> Result<Range, ParseError> {
+        self.build(true)
+    }
+
+    /// Whether any of what the chart plays is played at no gain.
+    pub fn has_zero_ev(&self) -> bool {
+        !self.zero_ev.is_empty()
+    }
+
+    fn build(&self, drop_zero_ev: bool) -> Result<Range, ParseError> {
         let mut range = Range::empty();
         for (hand, per_mille) in self.hands {
+            if drop_zero_ev && self.zero_ev.contains(hand) {
+                continue;
+            }
             let class = HandClass::parse(hand)?;
             range.set_class(class, f32::from(*per_mille) / 1000.0);
         }
@@ -289,11 +320,10 @@ mod tests {
 
     #[test]
     fn every_chart_is_addressable_and_parses() {
-        // Four complete tournament depths, twenty blinds without the limp to
-        // isolate, and two six-handed cash games with no UTG1 or LJ to speak
-        // of - the raked one without a limp to isolate either, the rakeless
-        // one with.
-        assert_eq!(CHARTS.len(), 4 * 15 + 14 + 10 + 11);
+        // Four complete tournament depths, twenty blinds complete as well, and
+        // two six-handed cash games with no UTG1 or LJ to speak of - the raked
+        // one without a limp to isolate, the rakeless one with.
+        assert_eq!(CHARTS.len(), 5 * 15 + 10 + 11);
         for chart in CHARTS {
             let range = chart
                 .range()
@@ -417,14 +447,86 @@ mod tests {
     }
 
     #[test]
-    fn twenty_blinds_has_everything_but_the_limp_to_isolate() {
+    fn dropping_the_zero_ev_hands_leaves_the_part_that_wins() {
+        // Defending the big blind is where the fringe is widest: the last hands
+        // in are called precisely because folding them would be no worse.
+        let defence = chart("mtt-20bb-defend-sb");
+        assert!(defence.has_zero_ev());
+        let whole = defence.range().expect("it parses");
+        let winning = defence
+            .range_without_zero_ev()
+            .expect("so does the trimmed one");
+        assert!(winning.combo_count() < whole.combo_count());
+        assert!(winning.combo_count() > 0.0);
+
+        // Every hand it drops is one the chart held, and nothing else moves:
+        // the hands that stay keep the weight the solver gave them.
+        for (hand, per_mille) in defence.hands {
+            let class = HandClass::parse(hand).expect("a hand the chart names");
+            let kept = winning.class_weight(class);
+            if defence.zero_ev.contains(hand) {
+                assert_eq!(kept, 0.0, "{hand} is a 0-EV hand and should be gone");
+            } else {
+                assert!(
+                    (kept - f32::from(*per_mille) / 1000.0).abs() < 1e-6,
+                    "{hand} changed weight"
+                );
+            }
+        }
+
+        // A chart with nothing to drop gives back the same range either way,
+        // which is what stops the option looking broken where it does nothing.
+        let opener = chart("mtt-100bb-open-utg");
+        if !opener.has_zero_ev() {
+            assert_eq!(
+                opener.range().unwrap().combo_count(),
+                opener.range_without_zero_ev().unwrap().combo_count()
+            );
+        }
+    }
+
+    #[test]
+    fn the_zero_ev_fringe_is_the_bottom_of_a_range_not_the_top() {
+        // Every hand named as 0-EV is a hand the chart actually plays -
+        // otherwise the option would claim to drop something that was never
+        // there. Note that being played *always* does not save a hand: the
+        // last hand a solver opens is opened every time and still gains
+        // nothing measurable, which is exactly the fringe this is about.
+        for chart in CHARTS {
+            for hand in chart.zero_ev {
+                assert!(
+                    chart.hands.iter().any(|(name, _)| name == hand),
+                    "{}: {hand} is not in the chart",
+                    chart.id
+                );
+            }
+            // And it is the bottom of the range, never the top: no solution is
+            // indifferent about aces.
+            for premium in ["AA", "KK", "AKs"] {
+                assert!(
+                    !chart.zero_ev.contains(&premium),
+                    "{}: {premium} cannot be 0-EV",
+                    chart.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn twenty_blinds_is_a_complete_depth_like_the_others() {
         for seat in [Seat::Utg, Seat::Btn] {
             assert!(chart_for(Stack::Bb20, Spot::Open, seat).is_some());
             assert!(chart_for(Stack::Bb20, Spot::Defend, seat).is_some());
         }
         assert!(chart_for(Stack::Bb20, Spot::RaiseFirstIn, Seat::Sb).is_some());
-        // That shallow the small blind raises or folds, so there is no limp.
-        assert!(chart_for(Stack::Bb20, Spot::Isolate, Seat::Sb).is_none());
+
+        // The small blind limps this shallow too, so the big blind has an
+        // isolate - and that shallow it is a shove or a raise rather than a
+        // call: there is no folding a limp when the blind is already in.
+        let iso = chart_for(Stack::Bb20, Spot::Isolate, Seat::Sb).expect("the limp is solved");
+        let range = iso.range().expect("it parses");
+        assert!(range.combo_count() > 0.0);
+        assert!(iso.size_bb <= 3.0, "raising a limp is small this shallow");
     }
 
     #[test]

@@ -24,13 +24,15 @@ use crate::range::Range;
 use crate::stats::{stat_count, ComboStats, StatId};
 
 /// How many colours a hand can be painted, not counting "unpainted".
-pub const COLOURS: usize = 7;
+pub const COLOURS: usize = 5;
 
 /// The palette, in the order it is offered.
 ///
 /// Stable keys rather than indices, so a saved session survives the palette
-/// growing a colour.
-pub const PALETTE: [&str; COLOURS] = ["blue", "green", "red", "violet", "amber", "cyan", "olive"];
+/// changing size. Five: a strategy that needs a sixth colour has stopped being
+/// a strategy anyone can read off the matrix at a glance, and the two that used
+/// to follow were close enough to the others to be mistaken for them.
+pub const PALETTE: [&str; COLOURS] = ["blue", "green", "red", "violet", "amber"];
 
 /// The colour of one hand: `0` for unpainted, `1..=COLOURS` for a palette entry.
 pub type Colour = u8;

@@ -104,6 +104,10 @@ export interface View {
   filtersEnabled: boolean;
   passFraction: number;
   checkmarks: boolean[];
+  /** The groups of flops a pass is narrowed to, as `axis/group` keys. */
+  flopGroups: string[];
+  /** How many flops a pass would look at, after the dead cards and the groups. */
+  filteredFlops: number;
   /** Combos of the active range left after the board and the dead cards. */
   liveCombos: number;
   mode: BreakdownMode;
@@ -124,6 +128,8 @@ export interface LibraryEntry {
   description: string;
   percent: number;
   sizeBb: number;
+  /** Whether this chart plays anything at no gain. */
+  hasZeroEv: boolean;
 }
 
 /** The library, as the engine ships it. */
@@ -156,6 +162,9 @@ export interface FlopGroup {
   label: string;
   flops: number;
   fraction: number;
+  /** How many of those also satisfy the ticks on the *other* axes. */
+  kept: number;
+  keptFraction: number;
 }
 
 /** One way of cutting up the flops. */
@@ -168,6 +177,8 @@ export interface FlopAxis {
 /** Every axis of the flop breakdown. */
 export interface FlopBreakdown {
   total: number;
+  /** How many flops satisfy every tick, which is what a pass runs over. */
+  kept: number;
   axes: FlopAxis[];
 }
 

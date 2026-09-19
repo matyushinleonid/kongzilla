@@ -2,7 +2,8 @@
 //! engine does. Run with `make bench`.
 
 use kongzilla_core::cards::CardSet;
-use kongzilla_core::preflop::over_all_flops;
+use kongzilla_core::flops::FlopFilter;
+use kongzilla_core::preflop::over_flops;
 use kongzilla_core::range::Range;
 use kongzilla_core::stats::{ClassifyOptions, StatMask};
 use std::time::Instant;
@@ -16,11 +17,12 @@ fn main() {
     ] {
         let range = Range::parse(notation).expect("the benchmark ranges parse");
         let started = Instant::now();
-        let result = over_all_flops(
+        let result = over_flops(
             &range,
             CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,
+            FlopFilter::EVERYTHING,
         );
         let elapsed = started.elapsed();
         println!(

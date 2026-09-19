@@ -6,8 +6,8 @@
  */
 
 import { track } from "../analytics";
-import { chrome, mutate, state } from "../store";
-import { RANKS, SUITS, cardButton, cardSlot, die } from "./cards";
+import { chrome, dealFlop, mutate, state } from "../store";
+import { RANKS, SUITS, cardButton, cardSlot } from "./cards";
 
 export function createBoardPanel(): {
   element: HTMLElement;
@@ -41,11 +41,15 @@ export function createBoardPanel(): {
     }
   }
 
-  const actions = document.createElement("div");
-  actions.className = "row board-actions";
+  // Clearing lives in the head, beside the street it is clearing, rather than
+  // on a row of its own under the grid. Dealing has gone to the flops panel,
+  // where the groups it deals from are - and between them that is a row of
+  // buttons back, which the flops list underneath puts to better use.
   const clear = document.createElement("button");
   clear.type = "button";
-  clear.className = "btn";
+  clear.className = "btn board-clear";
+  // The word rather than a cross: a cross in a panel heading is the thing that
+  // closes the panel, and this empties the board.
   clear.textContent = "Clear";
   clear.title = "Clear the board (Backspace)";
   clear.addEventListener("click", () => {
@@ -54,18 +58,11 @@ export function createBoardPanel(): {
     syncBoard();
     track("board_cleared");
   });
-  const random = document.createElement("button");
-  random.type = "button";
-  random.className = "btn";
-  random.append(die(), document.createTextNode("Random"));
-  random.title = "Deal a random flop (R)";
-  random.title = "Deal a random flop";
+  head.append(clear);
   const randomBoard = () => {
-    chrome.boardCards = randomCards(3, new Set(state().dead));
-    chrome.visible = 3;
-    syncBoard();
+    dealFlop();
+    track("flop_dealt");
   };
-  random.addEventListener("click", randomBoard);
 
   // One street back or forward, which is what the arrows either side of the
   // street name do and what the arrow keys do.
@@ -78,12 +75,11 @@ export function createBoardPanel(): {
 
   back.addEventListener("click", () => stepStreet(-1));
   forward.addEventListener("click", () => stepStreet(1));
-  actions.append(clear, random);
 
   const tally = document.createElement("p");
   tally.className = "tally";
 
-  panel.append(head, slots, grid, actions, tally);
+  panel.append(head, slots, grid, tally);
 
   function syncBoard(): void {
     const cards = chrome.boardCards.slice(0, chrome.visible);
@@ -161,21 +157,6 @@ export function createBoardPanel(): {
  */
 function combos(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function randomCards(count: number, exclude: Set<string>): string[] {
-  const deck: string[] = [];
-  for (const rank of RANKS) {
-    for (const suit of SUITS) {
-      const card = `${rank}${suit}`;
-      if (!exclude.has(card)) deck.push(card);
-    }
-  }
-  for (let i = deck.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [deck[i], deck[j]] = [deck[j], deck[i]];
-  }
-  return deck.slice(0, count);
 }
 
 function arrow(label: string, title: string): HTMLButtonElement {
