@@ -40,6 +40,14 @@ export interface Chrome {
   libraryStack: string;
   /** The chart the range came from, while it still is that chart. */
   libraryChart: { id: string; notation: string } | null;
+  /**
+   * Whether a chart arrives without the hands whose EV is zero.
+   *
+   * A study choice rather than part of the range, so it stays here and out of
+   * the link: what a shared link has to carry is the range that was loaded,
+   * which it does either way.
+   */
+  libraryNoZeroEv: boolean;
   /** Whether the flops panel is open or folded to a strip. */
   flopsOpen: boolean;
   /** The bucket the board on the table was dealt from, while it still is it. */
@@ -90,6 +98,7 @@ export const chrome: Chrome = {
   showCombos: false,
   libraryStack: "",
   libraryChart: null,
+  libraryNoZeroEv: false,
   flopsOpen: true,
   dealtBucket: null,
   editing: null,
@@ -159,7 +168,9 @@ export async function boot(wasmSource?: BufferSource): Promise<void> {
   if (!restored) {
     // A button opening range is the most-looked-at spot there is, so the app
     // opens on one rather than on an empty matrix.
-    engine.loadLibrary("mtt-100bb-open-btn");
+    // Whole, because the app opens on the solution rather than on a reading of
+    // it; the switch in the panel is the reader's to press.
+    engine.loadLibrary("mtt-100bb-open-btn", false);
     chrome.libraryStack = "100bb";
     chrome.libraryChart = {
       id: "mtt-100bb-open-btn",
@@ -310,6 +321,18 @@ export function overlap(): OverlapMatrix {
 }
 
 /** Deals a random flop from one bucket, and remembers which bucket it was. */
+export function dealFlop(): void {
+  mutate((engine) => {
+    if (!engine.dealFlop()) return;
+    const view: View = JSON.parse(engine.view());
+    chrome.boardCards = [...view.boardCards];
+    chrome.visible = view.boardCards.length;
+    // It came from the whole selection rather than from one row, so no row
+    // gets to claim it.
+    chrome.dealtBucket = null;
+  });
+}
+
 export function dealFlopFrom(axis: string, group: string): void {
   mutate((engine) => {
     if (!engine.dealFlopFrom(axis, group)) return;
@@ -387,6 +410,64 @@ export function runPreflop(): void {
   }, 0);
 }
 
+/**
+ * How many hand-flop pairs a pass would have to classify.
+ *
+ * The whole cost of the thing, and it is known before doing any of it: every
+ * hand in the range against every flop being looked at.
+ */
+export function preflopWork(): number {
+  const view = state();
+  return view.liveCombos * view.filteredFlops;
+}
+
+/**
+ * How much work may happen without being asked for.
+ *
+ * Measured rather than guessed: the engine classifies about 7.5 million pairs a
+ * second in WebAssembly, so this is roughly a fifth of a second - long enough
+ * to cover a narrowed set of flops or a hand or two over all of them, short
+ * enough not to be felt after the range stops moving. Above it the reader gets
+ * a button, because three and a half seconds of a frozen page is not something
+ * to do to somebody who was only typing.
+ */
+const AUTOMATIC_WORK = 1_500_000;
+
+/** Whether the pass is cheap enough to just run. */
+export function preflopIsCheap(): boolean {
+  return preflopWork() <= AUTOMATIC_WORK;
+}
+
+/** Waiting for the range to stop moving before running a cheap pass. */
+let settling = 0;
+
+/**
+ * Runs the pass once the range has stopped changing, if it is cheap enough.
+ *
+ * Painting a range is a drag across cells, and every cell is a change: without
+ * the wait this would run a pass per cell and the drag would stutter. With it,
+ * the numbers appear a moment after the hand leaves the mouse.
+ */
+export function runPreflopIfCheap(): void {
+  if (chrome.preflop || chrome.preflopRunning || !preflopIsCheap()) return;
+  if (settling) window.clearTimeout(settling);
+  settling = window.setTimeout(() => {
+    settling = 0;
+    if (chrome.preflop || chrome.preflopRunning || !preflopIsCheap()) return;
+    runPreflop();
+  }, 250);
+}
+
+/** Adds or removes one group of flops from what a pass looks at. */
+export function toggleFlopGroup(axis: string, group: string): void {
+  mutate((e) => e.toggleFlopGroup(axis, group));
+}
+
+/** Puts every flop back into what a pass looks at. */
+export function clearFlopFilter(): void {
+  mutate((e) => e.clearFlopFilter());
+}
+
 /** The session as JSON, for saving. */
 export function snapshot(): string {
   return engine.snapshot();
@@ -404,18 +485,17 @@ export function restore(json: string): void {
 
 function refresh(): void {
   view = JSON.parse(engine.view());
-  // A pass over all the flops survives anything that does not change what it
-  // was a pass over. Ticking a statistic is the thing a reader does most often
-  // right after running one, and throwing the answer away for it - with nothing
-  // on screen to say so - is how the tick came to look as though it did nothing.
-  // The engine holds the pass, so the engine decides: a number back means it
-  // still applies, and it is the number for the ticks as they now stand.
-  const hit = engine.preflopHit();
-  if (hit === undefined || hit === null) {
-    chrome.preflop = null;
-  } else if (chrome.preflop) {
-    chrome.preflop = { ...chrome.preflop, hit };
-  }
+  // A pass over the flops survives anything that does not change what it was a
+  // pass over. Ticking a statistic is the thing a reader does most often right
+  // after running one, and throwing the answer away for it - with nothing on
+  // screen to say so - is how the tick came to look as though it did nothing.
+  //
+  // The engine holds one pass per seat, so the engine decides which applies:
+  // asking it after every change puts back whatever this seat already knows,
+  // which is how moving to the other range to compare and moving back again
+  // stopped costing a second and a half.
+  const cached = engine.preflopCached();
+  chrome.preflop = cached === undefined || cached === null ? null : JSON.parse(cached);
   writeHash(engine.snapshot());
   repaint();
 }

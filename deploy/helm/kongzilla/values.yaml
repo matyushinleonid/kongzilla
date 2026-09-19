@@ -35,13 +35,13 @@ service:
 
 # Visit statistics. A separate deployment behind /api/ on the same host, so the
 # page reports first-party and nothing is blocked or handed to a third party.
+#
+# It runs the same image as the site, started with the beacon binary instead of
+# nginx - so there is nothing to configure here about which image, and the two
+# cannot drift apart.
 beacon:
   enabled: false
   replicaCount: 1
-  image:
-    repository: kongzilla-beacon
-    # Defaults to the site's tag, so the two are always released together.
-    tag: ""
   redis:
     # Where to find a Redis URL, when the visitor set should be shared across
     # replicas and survive a restart. Without one the count is exact but

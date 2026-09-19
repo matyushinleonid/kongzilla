@@ -338,17 +338,24 @@ describe("the range panel", () => {
     // The solver's mix survives rather than being rounded into whole combos.
     expect(state().players[state().active].notation).toMatch(/:/);
 
-    // Switching depth reloads the same chip with the other solution.
+    // Switching depth carries the spot across: the reader had UTG's open on
+    // the table and wants UTG's open at the other depth, not a row of chips to
+    // press again.
+    const loaded = () => state().players[state().active].notation;
+    opens()[0].click();
+    renderAll();
+    const hundred = loaded();
     stacks[1].click();
     renderAll();
     expect(chrome.libraryStack).toBe("80bb");
     expect(opens()[0].title).toMatch(/UTG opens to 2 bb/);
-    opens()[0].click();
-    renderAll();
+    expect(opens()[0].classList.contains("active"), "the seat stays chosen").toBe(true);
+    expect(loaded(), "and the range is the other solution").not.toBe(hundred);
+    expect(chrome.libraryChart?.id).toBe("mtt-80bb-open-utg");
     expect(state().players[state().active].percent).toBeGreaterThan(16);
 
-    // Twenty blinds has the defences too now, but no limp to isolate: that
-    // shallow the small blind raises or folds.
+    // Twenty blinds is a complete depth: the opens, the defences, and the limp
+    // the small blind still makes that shallow.
     stacks[4].click();
     renderAll();
     expect(chrome.libraryStack).toBe("20bb");
@@ -361,10 +368,57 @@ describe("the range panel", () => {
       "CO",
       "BTN",
       "SB",
+      "SB limp",
     ]);
+    // Isolating a limp on twenty blinds is a small raise, and the big blind
+    // never folds to one - it is already in for a blind.
+    expect(defends()[7].title).toMatch(/over a small-blind limp/);
+    defends()[7].click();
+    renderAll();
+    expect(state().players[state().active].percent).toBeGreaterThan(30);
 
     stacks[0].click();
     renderAll();
+  });
+
+  test("a chart can arrive without the hands whose EV is nought", () => {
+    const stacks = Array.from(range.element.querySelectorAll<HTMLButtonElement>(".stacks .chip"));
+    const opens = () =>
+      Array.from(range.element.querySelectorAll<HTMLButtonElement>(".action-open .seat-chip"));
+    const trim = range.element.querySelector<HTMLButtonElement>(".trim-chip")!;
+    const percent = () => state().players[state().active].percent;
+
+    stacks[0].click();
+    renderAll();
+    opens()[0].click();
+    renderAll();
+    const whole = percent();
+    expect(trim.textContent).toMatch(/exclude 0-EV hands/);
+    expect(trim.classList.contains("on")).toBe(false);
+
+    // The fringe of an early open is the part that gains nothing, and an early
+    // open is where there is most of it.
+    trim.click();
+    renderAll();
+    expect(chrome.libraryNoZeroEv).toBe(true);
+    expect(trim.classList.contains("on")).toBe(true);
+    const trimmed = percent();
+    expect(trimmed).toBeLessThan(whole);
+    expect(trimmed).toBeGreaterThan(whole * 0.7);
+
+    // The switch is about what a chart is, so the one already loaded changed
+    // with it rather than waiting to be asked for again.
+    expect(chrome.libraryChart?.id).toBe(opens()[0].dataset.chart);
+    expect(opens()[0].classList.contains("active")).toBe(true);
+    expect(opens()[0].title).toMatch(/less the 0-EV ones/);
+
+    // And the strongest hands are never the ones dropped.
+    expect(state().classWeights[0]).toBe(1);
+
+    trim.click();
+    renderAll();
+    expect(percent()).toBeCloseTo(whole, 6);
+    expect(opens()[0].title).not.toMatch(/0-EV/);
   });
 
   test("shift-clicking a cell pins its suit breakdown", () => {
@@ -918,13 +972,13 @@ describe("the statistics panel", () => {
     expect(sb.classList.contains("active")).toBe(true);
 
     // The chips are reused across stacks, so the one that is clicked has to be
-    // the one whose label is showing - not the one it was built with.
+    // the one whose label is showing - not the one it was built with. Changing
+    // the depth carries the chosen seat with it and loads that seat's other
+    // solution, so the range has already moved before anything else is pressed.
     stack("40bb").click();
     renderAll();
     const sb40 = chips().find((chip) => chip.textContent === "SB")!;
-    expect(sb40.classList.contains("active")).toBe(false);
-    sb40.click();
-    renderAll();
+    expect(sb40.classList.contains("active")).toBe(true);
     const at40 = state().players[state().active].percent;
     expect(at40).not.toBeCloseTo(at100, 1);
     // The tooltip and the range agree about what was loaded.
@@ -1316,6 +1370,7 @@ describe("the keyboard", () => {
         chrome.boardCards = ["Qs", "Jd", "4c"];
         chrome.visible = 3;
       },
+      mascot: () => {},
       stepStreet: (delta) => {
         chrome.visible = Math.max(0, Math.min(chrome.boardCards.length, chrome.visible + delta));
         mutate((engine) => engine.setBoard(chrome.boardCards.slice(0, chrome.visible).join(" ")));
@@ -1631,7 +1686,7 @@ describe("the flops panel", () => {
 describe("the preflop mode", () => {
   test("swaps filters for checkmarks and reports how often the range hits", async () => {
     // Clear the board so the panel switches modes.
-    board.element.querySelectorAll<HTMLButtonElement>(".board-actions .btn")[0].click();
+    board.element.querySelector<HTMLButtonElement>(".board-clear")!.click();
     chrome.boardCards = [];
     chrome.visible = 0;
     renderAll();

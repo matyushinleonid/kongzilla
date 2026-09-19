@@ -30,8 +30,6 @@
   --group-3: #d9534f;
   --group-4: #9b59b6;
   --group-5: #d6a24a;
-  --group-6: #2aa7b5;
-  --group-7: #8ba43b;
   --accent: #1e88e5;
   --go: #3cb54a;
   --go-edge: #2f9c3c;
@@ -121,8 +119,6 @@
     --group-3: #e2695f;
     --group-4: #b06fcc;
     --group-5: #e0b45f;
-    --group-6: #3cc0cf;
-    --group-7: #a3bd4d;
     --accent: #4f9be8;
     --seat-0: #4f9be8;
     --seat-1: #e1685c;
@@ -200,8 +196,6 @@
   --group-3: #e2695f;
   --group-4: #b06fcc;
   --group-5: #e0b45f;
-  --group-6: #3cc0cf;
-  --group-7: #a3bd4d;
   --accent: #4f9be8;
   --seat-0: #4f9be8;
   --seat-1: #e1685c;
@@ -855,18 +849,6 @@ body {
   opacity: 0.7;
 }
 
-.board-actions {
-  margin-top: 6px;
-}
-
-.board-actions .btn {
-  flex: 1;
-  background: var(--go);
-  border-color: var(--go-edge);
-  color: #ffffff;
-  font-weight: 600;
-}
-
 .tally {
   margin: 8px 0 0;
   color: var(--ink-soft);
@@ -937,7 +919,16 @@ body {
   gap: 2px;
   flex: 1;
   user-select: none;
-  touch-action: none;
+  /*
+   * The browser keeps panning and pinching; the app gets taps and holds.
+   *
+   * This used to be `none`, which handed the app every touch that began on the
+   * grid - and the grid is most of the screen on a phone, so a finger landing
+   * on it could not scroll the page at all. Dragging a brush across cells never
+   * worked by finger in any case: a touch is captured by the cell it starts on,
+   * so the cells it passes over are never told.
+   */
+  touch-action: manipulation;
 }
 
 /*
@@ -1236,6 +1227,26 @@ body {
   min-width: 56px;
 }
 
+/* The line that closes the library off, hard right against the chips above. */
+.library-trim {
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+/* Specific enough to beat `.chip { flex: 1 }`: this is a switch rather than one
+   of a row of equals, so it takes its own width. */
+.library-trim .trim-chip {
+  flex: none;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+}
+
+.trim-chip.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .libraries {
   display: flex;
   flex-direction: column;
@@ -1463,6 +1474,18 @@ body {
    in the ink of the panel rather than in a seat's colour. */
 .eq-graph .curve.curve-field {
   stroke: var(--ink-soft);
+}
+
+/*
+ * The other side of the enumeration is dashed, whoever it is.
+ *
+ * Two ranges that agree about their strongest hands draw the same curve there,
+ * and the one underneath disappears: the reader follows a line that is one
+ * colour until the two part and another colour after, and reads it as a single
+ * curve changing colour. A dash cannot hide under a solid line, so a stretch
+ * where the two agree still reads as two.
+ */
+.eq-graph .curve.curve-versus {
   stroke-dasharray: 4 3;
 }
 
@@ -1521,7 +1544,14 @@ body {
   color: #ffffff;
 }
 
-.clear-filters {
+/*
+ * Every button that puts something back to nothing wears the same colour,
+ * wherever it is: the painting in the statistics panel, the board, the ticked
+ * groups of flops. A reader learns one thing once.
+ */
+.clear-filters,
+.board-clear,
+.pick-clear {
   color: var(--warn);
 }
 
@@ -1556,6 +1586,16 @@ body {
   background: var(--track);
   border-radius: 2px;
   overflow: hidden;
+}
+
+/*
+ * The weight handles are dragged sideways, so the app needs that direction and
+ * the browser can keep the other: a finger that starts on the slider and goes
+ * up still scrolls the page, one that goes across still moves the handle.
+ */
+.weight-column .bar-track,
+.sliders .bar-track {
+  touch-action: pan-y;
 }
 
 .bar {
@@ -2352,16 +2392,6 @@ body.resizing {
   padding: 1px 4px;
 }
 
-.board-actions .btn .die {
-  margin-right: 5px;
-}
-
-.board-actions .btn:last-of-type {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
 /* A suit pip inside a line of text, coloured the way the card grids colour it. */
 .pip {
   font-style: normal;
@@ -2478,6 +2508,49 @@ body.resizing {
 
 /* The cheat sheet. One key opens it, one closes it, and it is built from the
    same table the keyboard runs on, so the two cannot drift apart. */
+/*
+ * The mascot, on press of a key nobody advertises.
+ *
+ * Over everything, dimming the page behind her rather than replacing it: she is
+ * not a screen the reader has navigated to, she is something that turned up,
+ * and a click anywhere sends her away.
+ */
+.mascot-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 55%);
+  opacity: 0;
+  transition: opacity 220ms ease;
+  cursor: pointer;
+}
+
+.mascot-backdrop.open {
+  opacity: 1;
+}
+
+.mascot {
+  max-width: min(92vw, 520px);
+  max-height: 92vh;
+  transform: translateY(12px) scale(0.98);
+  transition: transform 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  filter: drop-shadow(0 18px 40px rgb(0 0 0 / 55%));
+}
+
+.mascot-backdrop.open .mascot {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot-backdrop,
+  .mascot {
+    transition: none;
+  }
+}
+
 .sheet-backdrop {
   position: fixed;
   inset: 0;
@@ -2725,6 +2798,19 @@ body.resizing {
   font-style: normal;
 }
 
+/*
+ * `hidden` beats any display this stylesheet sets.
+ *
+ * The browser hides a hidden element with `[hidden] { display: none }`, which a
+ * class selector outranks - so any rule here giving an element a display makes
+ * the element unhideable, silently, and only in the state nobody looks at. It
+ * bit the flops panel's note, which went on explaining ticks that were no
+ * longer on screen.
+ */
+[hidden] {
+  display: none !important;
+}
+
 /* flop breakdown */
 
 .stacked-column {
@@ -2763,6 +2849,20 @@ body.resizing {
   line-height: 1.6;
 }
 
+.deal-any {
+  flex: none;
+  padding: 0 4px;
+  line-height: 1.5;
+}
+
+.board-clear {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 1.7;
+}
+
 .flops-summary {
   margin-left: auto;
   color: var(--ink-faint);
@@ -2788,6 +2888,57 @@ body.resizing {
   padding: 1px 0;
 }
 
+/*
+ * The tick column only exists while there is something to tick. A hidden
+ * element still leaves its gap behind, and sixteen rows of dead space on the
+ * left is the kind of thing that reads as a bug rather than as a column.
+ */
+.flops-body.picking .flop-row {
+  grid-template-columns: auto auto 116px 1fr;
+}
+
+.flop-pick {
+  flex: none;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-faint);
+  border-color: transparent;
+  background: none;
+}
+
+.flop-pick:hover {
+  color: var(--ink);
+}
+
+.flop-pick.on {
+  color: var(--accent);
+}
+
+/* A row in the pass is marked down its edge, which leaves the background free
+   to go on saying which bucket the flop on the table came from. */
+.flop-row.picked .flop-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.flop-pick-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px;
+  margin: 0 0 3px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--ink-faint);
+}
+
+.pick-clear {
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
 .flop-label {
   color: var(--ink-soft);
   white-space: nowrap;
@@ -2801,6 +2952,37 @@ body.resizing {
 
 .flop-row .bar {
   background: var(--draw);
+}
+
+/*
+ * The part of a group the ticks on the other headings took away.
+ *
+ * Same bar, same length as before anyone ticked anything - so the rows can
+ * still be read against each other - with the surviving part solid and the
+ * rest faded behind it. The same colour rather than a third one: it is the
+ * same flops, and what separates them is whether they are still in play.
+ */
+.bar-lost {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: block;
+  background: var(--draw);
+  opacity: 0.28;
+  transition:
+    width 90ms linear,
+    left 90ms linear;
+}
+
+/* A group no flop can be, given what else is ticked: the row is still there to
+   be read, but it is plainly not on offer. */
+.flop-row.shut-out .flop-label,
+.flop-row.shut-out .stat-value {
+  opacity: 0.45;
+}
+
+.flop-pick:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 /* ----- preflop mode ------------------------------------------------------- */

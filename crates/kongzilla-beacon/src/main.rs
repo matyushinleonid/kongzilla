@@ -131,7 +131,6 @@ fn serve_public(port: u16, own_host: String, state: Arc<Mutex<State>>) {
         };
         let address = client_address(&headers, request.remote_addr());
         let agent = header("user-agent").to_owned();
-        let referrer = header("referer").to_owned();
 
         let mut body = String::new();
         let limited = request.as_reader().take(MAX_BODY as u64 + 1);
@@ -142,19 +141,12 @@ fn serve_public(port: u16, own_host: String, state: Arc<Mutex<State>>) {
             reject(&state, "malformed");
             continue;
         }
-        handle(&state, &own_host, &address, &agent, &referrer, &body);
+        handle(&state, &own_host, &address, &agent, &body);
     }
 }
 
 /// Counts one report.
-fn handle(
-    state: &Arc<Mutex<State>>,
-    own_host: &str,
-    address: &str,
-    agent: &str,
-    referrer: &str,
-    body: &str,
-) {
+fn handle(state: &Arc<Mutex<State>>, own_host: &str, address: &str, agent: &str, body: &str) {
     let Ok(report) = serde_json::from_str::<Report>(body) else {
         reject(state, "malformed");
         return;
@@ -174,14 +166,15 @@ fn handle(
     }
     if report.name == "pageview" {
         state.metrics.record_path(&report.path);
-        // The header is the honest one; the body's is a courtesy for browsers
-        // that strip it, and either way only the host survives.
-        let source = if referrer.is_empty() {
-            report.referrer.as_str()
-        } else {
-            referrer
-        };
-        let host = metrics::referrer_host(source, own_host);
+        // Where the *visitor* came from is `document.referrer`, which the page
+        // reads and puts in the body. The request's own Referer header answers
+        // a different question - which page sent this request - and for a
+        // first-party beacon that is always a page of this site. Preferring
+        // the header, as this once did, threw the answer away on every real
+        // visit: the host matched our own, which reads as navigation rather
+        // than a referral, so nothing was ever recorded and the panel had
+        // nothing to draw. Only the host survives either way.
+        let host = metrics::referrer_host(&report.referrer, own_host);
         state.metrics.record_referrer(&host);
 
         let day = ident::today();
@@ -313,13 +306,15 @@ mod tests {
     #[test]
     fn a_page_view_counts_a_visitor_a_path_and_a_referrer() {
         let state = state();
+        // The shape a browser actually sends: where the visitor came from is in
+        // the body, because that is where the page puts what it read out of
+        // `document.referrer`.
         handle(
             &state,
             "kongzilla.leonid.sh",
             "203.0.113.7",
             "Mozilla/5.0 Safari",
-            "https://news.ycombinator.com/item?id=1",
-            r#"{"name":"pageview","path":"/guide/"}"#,
+            r#"{"name":"pageview","path":"/guide/","referrer":"https://news.ycombinator.com/item?id=1"}"#,
         );
         let text = rendered(&state);
         assert!(text.contains("kongzilla_events_total{name=\"pageview\"} 1"));
@@ -332,6 +327,52 @@ mod tests {
     }
 
     #[test]
+    fn coming_from_our_own_pages_is_navigation_rather_than_a_referral() {
+        let state = state();
+        // Reading a second page of the site is not a new referral, so the only
+        // thing recorded is the view itself.
+        handle(
+            &state,
+            "kongzilla.leonid.sh",
+            "203.0.113.7",
+            "Mozilla/5.0 Safari",
+            r#"{"name":"pageview","path":"/guide/","referrer":"https://kongzilla.leonid.sh/"}"#,
+        );
+        // Nor is arriving with nothing to say where from, which is most visits.
+        handle(
+            &state,
+            "kongzilla.leonid.sh",
+            "203.0.113.8",
+            "Mozilla/5.0 Safari",
+            r#"{"name":"pageview","path":"/","referrer":""}"#,
+        );
+        let text = rendered(&state);
+        assert!(text.contains("kongzilla_events_total{name=\"pageview\"} 2"));
+        // The family is always declared; what must be empty is its series. That
+        // is exactly what a dashboard reads as "no data".
+        assert!(
+            !text.contains("kongzilla_referrers_total{"),
+            "neither visit came from anywhere, so nothing should be counted:\n{text}"
+        );
+
+        // And one that did come from somewhere is recorded beside them, by
+        // host and no more than host.
+        handle(
+            &state,
+            "kongzilla.leonid.sh",
+            "203.0.113.9",
+            "Mozilla/5.0 Safari",
+            r#"{"name":"pageview","path":"/","referrer":"https://old.reddit.com/r/poker/comments/1/x/"}"#,
+        );
+        let text = rendered(&state);
+        assert!(
+            text.contains("kongzilla_referrers_total{host=\"reddit.com\"} 1"),
+            "{text}"
+        );
+        assert!(!text.contains("/r/poker"), "the path is nobody's business");
+    }
+
+    #[test]
     fn the_same_person_reading_two_pages_is_one_visitor() {
         let state = state();
         for path in ["/", "/guide/"] {
@@ -340,7 +381,6 @@ mod tests {
                 "kongzilla.leonid.sh",
                 "203.0.113.7",
                 "Mozilla/5.0 Safari",
-                "",
                 &format!(r#"{{"name":"pageview","path":"{path}"}}"#),
             );
         }
@@ -360,7 +400,6 @@ mod tests {
             "kongzilla.leonid.sh",
             "203.0.113.9",
             "Googlebot/2.1",
-            "",
             r#"{"name":"pageview","path":"/"}"#,
         );
         let text = rendered(&state);
@@ -378,14 +417,7 @@ mod tests {
         // Unparseable, and parseable but naming something this build does not
         // count. Neither may leave a trace in the registry.
         for body in ["not json", "{}", r#"{"name":"'; DROP TABLE"}"#] {
-            handle(
-                &state,
-                "kongzilla.leonid.sh",
-                "203.0.113.1",
-                "Safari",
-                "",
-                body,
-            );
+            handle(&state, "kongzilla.leonid.sh", "203.0.113.1", "Safari", body);
         }
         let text = rendered(&state);
         assert!(!text.contains("DROP TABLE"));
@@ -402,7 +434,6 @@ mod tests {
                 "kongzilla.leonid.sh",
                 "203.0.113.5",
                 "Safari",
-                "",
                 r#"{"name":"flop_dealt"}"#,
             );
         }

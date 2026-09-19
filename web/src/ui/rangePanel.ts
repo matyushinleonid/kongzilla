@@ -239,6 +239,25 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   ];
   const libraries = document.createElement("div");
   libraries.className = "libraries";
+
+  // One switch for the whole library rather than one per chip: it is a way of
+  // reading every chart, not a property of any one of them.
+  //
+  // A solver's range has a fringe it is indifferent about - hands it calls a
+  // fifth of the time whose EV is nought, so folding them would be no worse -
+  // and they are the hands a reader learning the spot least needs. Off, the
+  // chart is the solution as it stands; on, it is the part that wins something.
+  const trim = document.createElement("button");
+  trim.type = "button";
+  trim.className = "btn chip trim-chip";
+  trim.addEventListener("click", () => {
+    chrome.libraryNoZeroEv = !chrome.libraryNoZeroEv;
+    // The switch is about what a chart is, so the one on the table changes
+    // with it rather than waiting to be loaded again.
+    const loaded = chrome.libraryChart?.id;
+    if (loaded) loadChart(loaded);
+    else repaint();
+  });
   const games = GAMES.map(([game, label]) => {
     const block = document.createElement("div");
     block.className = `library library-${game}`;
@@ -252,6 +271,15 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
     libraries.append(block);
     return { game, block, heading, stackRow, rows };
   });
+
+  // Under both games and hard right: it is about the charts above it, and it
+  // was sitting against the quick buttons, which it does nothing to. Its own
+  // line rather than the end of one of theirs, because it belongs to neither
+  // game on its own.
+  const trimRow = document.createElement("div");
+  trimRow.className = "row library-trim";
+  trimRow.append(trim);
+  libraries.append(trimRow);
 
   const notation = document.createElement("textarea");
   notation.className = "notation";
@@ -277,7 +305,7 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   // remembers what it put in the range, so the light goes out the moment the
   // range stops being that chart.
   const loadChart = (id: string) => {
-    mutate((engine) => engine.loadLibrary(id));
+    mutate((engine) => engine.loadLibrary(id, chrome.libraryNoZeroEv));
     track("chart_loaded");
     chrome.libraryChart = { id, notation: state().players[state().active].notation };
     repaint();
@@ -285,6 +313,12 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
 
   const render = () => {
     const view = state();
+    trim.textContent = `${chrome.libraryNoZeroEv ? "☑" : "☐"} exclude 0-EV hands`;
+    trim.classList.toggle("on", chrome.libraryNoZeroEv);
+    trim.setAttribute("aria-pressed", String(chrome.libraryNoZeroEv));
+    trim.title = chrome.libraryNoZeroEv
+      ? "Charts arrive without the hands the solver makes nothing with. Press to load them whole."
+      : "Charts arrive as the solver plays them. Press to leave out the hands whose EV is nought — the ones it would break even folding.";
     // A hand has been dealt: there is nothing to type into, paint over or
     // narrow. The panel greys out rather than leaving controls that quietly
     // refuse, which is the difference between "you cannot" and "it is broken".
@@ -310,7 +344,23 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
             chip.title = what;
             chip.addEventListener("click", () => {
               chrome.libraryStack = stack;
-              repaint();
+              // A depth is a depth of the same spot. Somebody who has UTG's
+              // open on the table and presses 80bb wants UTG's open at eighty
+              // blinds, not a row of chips to press again - and before this
+              // they got neither, because changing the depth changed only which
+              // chips were drawn and left the old range sitting there.
+              const open = chrome.libraryChart?.id;
+              const showing = open && library.entries.find((entry) => entry.id === open);
+              const sameSpot =
+                showing &&
+                library.entries.find(
+                  (entry) =>
+                    entry.stack === stack &&
+                    entry.row === showing.row &&
+                    entry.label === showing.label,
+                );
+              if (sameSpot) loadChart(sameSpot.id);
+              else repaint();
             });
             return chip;
           }),
@@ -364,7 +414,15 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
           const button = chip as HTMLButtonElement;
           button.dataset.chart = chart.id;
           button.textContent = chart.label;
-          button.title = `${chart.description} — ${chart.percent.toFixed(1)}% of hands`;
+          // A chart the switch has nothing to take out of is left exactly as it
+          // is, and says nothing about it: loading it and seeing the range not
+          // move is the answer, and a chip that faded or explained itself only
+          // looked broken. The one that is trimmed does qualify its percentage,
+          // which is of the whole chart and no longer of what would load.
+          const trimmed = chrome.libraryNoZeroEv && chart.hasZeroEv;
+          button.title = trimmed
+            ? `${chart.description} — ${chart.percent.toFixed(1)}% of hands, less the 0-EV ones`
+            : `${chart.description} — ${chart.percent.toFixed(1)}% of hands`;
           button.classList.toggle("active", chrome.libraryChart?.id === chart.id);
         });
       }

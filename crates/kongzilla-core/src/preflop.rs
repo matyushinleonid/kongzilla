@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use crate::board::Board;
 use crate::breakdown::StatRow;
 use crate::cards::{CardSet, Combo};
+use crate::flops::FlopFilter;
 use crate::range::Range;
 use crate::stats::{stat_count, BoardContext, ClassifyOptions, StatMask};
 
@@ -67,15 +68,17 @@ impl PreflopBreakdown {
     }
 }
 
-/// Classifies `range` against every flop that the dead cards leave available.
+/// Classifies `range` against the flops the dead cards and `filter` leave.
 ///
 /// `hit` is the set of statistics that count as having hit; pass
-/// [`StatMask::EMPTY`] when nothing is marked.
-pub fn over_all_flops(
+/// [`StatMask::EMPTY`] when nothing is marked. An empty `filter` is every flop,
+/// which is the ordinary pass.
+pub fn over_flops(
     range: &Range,
     dead: CardSet,
     options: ClassifyOptions,
     hit: StatMask,
+    filter: FlopFilter,
 ) -> PreflopBreakdown {
     let hands: Vec<(Combo, f64)> = range
         .iter()
@@ -92,7 +95,7 @@ pub fn over_all_flops(
     if !hands.is_empty() {
         for flop in Board::all_flops() {
             let board_mask = flop.mask();
-            if board_mask.intersects(dead) {
+            if board_mask.intersects(dead) || !filter.matches(&flop) {
                 continue;
             }
             flops += 1;
@@ -148,11 +151,12 @@ mod tests {
     #[test]
     fn made_hand_fractions_sum_to_one_over_every_flop() {
         let range = Range::parse("AKs").unwrap();
-        let result = over_all_flops(
+        let result = over_flops(
             &range,
             CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,
+            FlopFilter::EVERYTHING,
         );
         assert_eq!(result.flops, 22_100);
         let made: f64 = result
@@ -167,11 +171,12 @@ mod tests {
     #[test]
     fn a_pocket_pair_flops_a_set_about_one_time_in_eight() {
         let range = Range::parse("77").unwrap();
-        let result = over_all_flops(
+        let result = over_flops(
             &range,
             CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,
+            FlopFilter::EVERYTHING,
         );
         // The textbook number is 11.8% for a set, and 10.8% once the quads and
         // full houses that also contain a third seven are counted separately.
@@ -187,11 +192,12 @@ mod tests {
     #[test]
     fn two_overcards_flop_a_pair_about_a_third_of_the_time() {
         let range = Range::parse("AKo").unwrap();
-        let result = over_all_flops(
+        let result = over_flops(
             &range,
             CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,
+            FlopFilter::EVERYTHING,
         );
         let paired = result.row("top-pair").unwrap().fraction
             + result.row("middle-pair").unwrap().fraction
@@ -208,18 +214,36 @@ mod tests {
     fn the_hit_figure_follows_the_checkmarks() {
         let range = Range::parse("AKs").unwrap();
         let options = ClassifyOptions::default();
-        let none = over_all_flops(&range, CardSet::EMPTY, options, StatMask::EMPTY);
+        let none = over_flops(
+            &range,
+            CardSet::EMPTY,
+            options,
+            StatMask::EMPTY,
+            FlopFilter::EVERYTHING,
+        );
         assert_eq!(none.hit, 0.0, "nothing marked means nothing hit");
 
         let marked: StatMask = [StatId::TOP_PAIR, StatId::FLUSH_DRAW].into_iter().collect();
-        let some = over_all_flops(&range, CardSet::EMPTY, options, marked);
+        let some = over_flops(
+            &range,
+            CardSet::EMPTY,
+            options,
+            marked,
+            FlopFilter::EVERYTHING,
+        );
         assert!(some.hit > 0.0 && some.hit < 1.0, "hit was {}", some.hit);
 
         // Marking every made rung means the range always hits.
         let everything: StatMask = StatId::all()
             .filter(|stat| stat.def().block == crate::stats::StatBlock::Made)
             .collect();
-        let all = over_all_flops(&range, CardSet::EMPTY, options, everything);
+        let all = over_flops(
+            &range,
+            CardSet::EMPTY,
+            options,
+            everything,
+            FlopFilter::EVERYTHING,
+        );
         assert!((all.hit - 1.0).abs() < 1e-9);
     }
 
@@ -227,7 +251,13 @@ mod tests {
     fn dead_cards_remove_flops_and_hands() {
         let range = Range::parse("AKs").unwrap();
         let dead = CardSet::parse("As Ks").unwrap();
-        let result = over_all_flops(&range, dead, ClassifyOptions::default(), StatMask::EMPTY);
+        let result = over_flops(
+            &range,
+            dead,
+            ClassifyOptions::default(),
+            StatMask::EMPTY,
+            FlopFilter::EVERYTHING,
+        );
         // Fifty cards leave C(50,3) flops, and the spade combination is gone.
         assert_eq!(result.flops, 19_600);
         assert!(result.total > 0.0);
@@ -235,11 +265,12 @@ mod tests {
 
     #[test]
     fn an_empty_range_produces_nothing() {
-        let result = over_all_flops(
+        let result = over_flops(
             &Range::empty(),
             CardSet::EMPTY,
             ClassifyOptions::default(),
             StatMask::EMPTY,
+            FlopFilter::EVERYTHING,
         );
         assert_eq!(result.total, 0.0);
         assert_eq!(result.hit, 0.0);

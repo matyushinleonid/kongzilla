@@ -22,6 +22,7 @@ import {
   state,
 } from "../store";
 import { SUIT_GLYPH } from "./cards";
+import { press, touchOnly } from "./press";
 
 let painting: number | null = null;
 
@@ -59,19 +60,26 @@ export function createMatrix(): HTMLElement {
     // key, one of them a bare glyph, is worse than one made properly.
     cell.append(label, count);
 
-    cell.addEventListener("pointerdown", (event) => {
-      event.preventDefault();
+    press(cell, {
+      act: (event) => {
+        const erase = event.button === 2 || state().classWeights[index] > 0;
+        painting = erase ? 0 : chrome.brush;
+        apply(index);
+        // A finger has no hover to open the breakdown with, so a tap leaves it
+        // showing the cell it just painted.
+        if (event.pointerType === "touch" && chrome.suitCell === null) {
+          chrome.suitPeek = index;
+          repaint();
+        }
+      },
       // Shift pins the suit breakdown open, so the brush can be dragged across
-      // it. Hovering already shows it; pinning is what makes it usable.
-      if (event.shiftKey) {
+      // it; hovering already shows it, and pinning is what makes it usable. A
+      // held finger is the same request from a hand that has no shift key.
+      hold: () => {
         chrome.suitCell = chrome.suitCell === index ? null : index;
         chrome.suitPeek = chrome.suitCell;
         repaint();
-        return;
-      }
-      const erase = event.button === 2 || state().classWeights[index] > 0;
-      painting = erase ? 0 : chrome.brush;
-      apply(index);
+      },
     });
     cell.addEventListener("pointerenter", () => {
       if (painting !== null) apply(index);
@@ -222,7 +230,8 @@ let suitBrush: number | null = null;
  * A hand with two suits needs two axes: the higher card's suit down the side,
  * the lower card's across the top, which puts a pair in one triangle and an
  * offsuit hand everywhere off the diagonal. A suited hand has only one suit, so
- * it gets one row rather than a grid with twelve empty slots in it.
+ * it gets one row rather than a grid with twelve empty slots in it - and that
+ * row is labelled by suit alone, because the suit is both cards'.
  */
 function renderSuitPopup(popup: HTMLElement, cell: number | null, filtersOn: boolean): void {
   if (cell === null) {
@@ -259,7 +268,11 @@ function renderSuitPopup(popup: HTMLElement, cell: number | null, filtersOn: boo
   name.textContent = label;
   const hint = document.createElement("i");
   hint.className = "suit-popup-hint";
-  hint.textContent = pinned ? "Esc or ✕ to close" : "⇧-click to pin";
+  hint.textContent = pinned
+    ? "Esc or ✕ to close"
+    : touchOnly()
+      ? "hold a cell to pin"
+      : "⇧-click to pin";
   head.append(name, hint);
   if (pinned) {
     // The same way out the combo editor has, because it is the same kind of
@@ -281,9 +294,12 @@ function renderSuitPopup(popup: HTMLElement, cell: number | null, filtersOn: boo
 
   const table = document.createElement("div");
   if (suited) {
-    // One suit per combination, so one row, and the header names it.
+    // One suit per combination, so one row - and the header is the bare pip.
+    // Both cards wear that suit, which is what makes the hand suited, so
+    // hanging a rank off it would name one of the two and quietly claim the
+    // suit belongs to that one.
     table.className = "suit-grid one-row";
-    for (const suit of SUITS) table.append(header(suit, label[0]));
+    for (const suit of SUITS) table.append(header(suit));
     for (const suit of SUITS) table.append(suitCell(byKey.get(`${suit}${suit}`), filtersOn));
   } else {
     // Two cards, two axes - and which axis is which card has to be written
@@ -312,11 +328,17 @@ function corner(): HTMLElement {
   return element;
 }
 
-/** One axis label: a rank and the suit it wears in that row or column. */
-function header(suit: string, rank: string): HTMLElement {
+/**
+ * One axis label: a suit, and the rank that wears it where there is one.
+ *
+ * Two cards of different suits need saying which axis is which card. One suit
+ * across both cards does not, and naming a card there would be worse than
+ * saying nothing.
+ */
+function header(suit: string, rank?: string): HTMLElement {
   const element = document.createElement("span");
   element.className = `suit-head suit-${suit}`;
-  element.textContent = `${rank}${SUIT_GLYPH[suit] ?? suit}`;
+  element.textContent = `${rank ?? ""}${SUIT_GLYPH[suit] ?? suit}`;
   return element;
 }
 
@@ -370,12 +392,13 @@ function suitCell(
     const wanted = suitBrush ?? 0;
     mutate((engine) => engine.setComboWeight(combo.index, wanted));
   };
-  element.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    // The same rule the matrix uses: press a hand that is in to take it out.
-    suitBrush = combo.weight > 0 ? 0 : chrome.brush;
-    paint();
+  press(element, {
+    act: (event) => {
+      event.stopPropagation();
+      // The same rule the matrix uses: press a hand that is in to take it out.
+      suitBrush = combo.weight > 0 ? 0 : chrome.brush;
+      paint();
+    },
   });
   element.addEventListener("pointerenter", () => {
     if (suitBrush !== null) paint();

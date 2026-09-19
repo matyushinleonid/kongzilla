@@ -36,7 +36,8 @@ export type Event =
   | "copy_range"
   | "session_saved"
   | "image_saved"
-  | "preflop_run";
+  | "preflop_run"
+  | "flop_group_picked";
 
 /** Events already sent this session, for the ones only worth hearing once. */
 const sent = new Set<string>();

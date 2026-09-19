@@ -16,7 +16,7 @@ use crate::breakdown::{self, Breakdown, BreakdownMode, OverlapMatrix};
 use crate::cards::{CardSet, Combo, HandClass, NUM_CLASSES, NUM_COMBOS, SUIT_CHARS};
 use crate::equity::{self, ComboEquity, EquityReport, HotCard};
 use crate::error::ParseError;
-use crate::flops::{self, FlopBreakdown};
+use crate::flops::{self, FlopBreakdown, FlopFilter};
 use crate::groups::{Colour, GroupSet, Mark, DEFAULT_COLOUR};
 use crate::library;
 use crate::preflop::{self, PreflopBreakdown};
@@ -169,6 +169,12 @@ pub struct Session {
     mode: BreakdownMode,
     ranking: Ranking,
     checkmarks: StatMask,
+    /// Which flops a pass over them should look at.
+    ///
+    /// It belongs to the table rather than to a seat: the point of narrowing to
+    /// two-tone ace-high boards is to ask every range the same question, so
+    /// moving between seats has to leave the question standing.
+    flop_filter: FlopFilter,
     /// The colour the palette is holding.
     colour: Colour,
     cache: ComboStats,
@@ -193,7 +199,15 @@ pub struct Session {
     /// Kept because the pass costs a second and a half and the thing a reader
     /// changes most often afterwards - which statistics count as a hit - does
     /// not change what the pass found, only what is asked of it.
-    preflop_cache: RefCell<Option<(u64, PreflopBreakdown)>>,
+    /// The passes over the flops that have been run, newest last.
+    ///
+    /// One slot used to be enough, because there was one range. With several
+    /// seats the reader runs a pass, switches to the other range to compare,
+    /// and switching back used to find the first answer gone - so the work was
+    /// done twice to look at the same two numbers. It is keyed by what the pass
+    /// was over, so two seats holding the same range share one entry, and it is
+    /// capped: a pass is large, and nobody compares seven of them.
+    preflop_cache: RefCell<Vec<(u64, PreflopBreakdown)>>,
     /// What share of each colour a street filter lets through, `0..=1`.
     ///
     /// One per palette colour, unpainted first. Painting says which hands the
@@ -241,7 +255,7 @@ impl Session {
             rng: Rng::new(equity::MONTE_CARLO_SEED),
             compare: None,
             versus: None,
-            preflop_cache: RefCell::new(None),
+            preflop_cache: RefCell::new(Vec::new()),
             colour_shares: [1.0; crate::groups::COLOURS + 1],
             equity_cache: RefCell::new(EquityCache::default()),
             board,
@@ -250,6 +264,7 @@ impl Session {
             mode: BreakdownMode::Absolute,
             ranking: Ranking::default(),
             checkmarks: StatMask::EMPTY,
+            flop_filter: FlopFilter::EVERYTHING,
             colour: DEFAULT_COLOUR,
             cache: ComboStats::build(&board, CardSet::EMPTY, options),
         }
@@ -598,10 +613,22 @@ impl Session {
     /// Returns `false` if there is no such chart, so an old saved link naming one
     /// that has since been renamed fails quietly rather than throwing.
     pub fn load_library(&mut self, id: &str) -> bool {
+        self.load_library_chart(id, false)
+    }
+
+    /// Loads a chart, optionally without the hands whose EV is zero.
+    pub fn load_library_chart(&mut self, id: &str, without_zero_ev: bool) -> bool {
         if !self.editable() {
             return false;
         }
-        match library::chart_by_id(id).and_then(|chart| chart.range().ok()) {
+        let built = |chart: &library::Chart| {
+            if without_zero_ev {
+                chart.range_without_zero_ev().ok()
+            } else {
+                chart.range().ok()
+            }
+        };
+        match library::chart_by_id(id).and_then(built) {
             Some(range) => {
                 self.active_mut().range = range;
                 self.apply_default_groups(Because::TheRangeChanged);
@@ -1390,6 +1417,29 @@ impl Session {
         self.checkmarks = StatMask::EMPTY;
     }
 
+    /// Which flops a pass over them looks at.
+    pub fn flop_filter(&self) -> FlopFilter {
+        self.flop_filter
+    }
+
+    /// Adds or removes one group of flops from what a pass looks at.
+    ///
+    /// `false` when there is no such group, which is the only way to get it
+    /// wrong: everything else is a tick.
+    pub fn toggle_flop_group(&mut self, axis: &str, group: &str) -> bool {
+        self.flop_filter.toggle(axis, group)
+    }
+
+    /// Puts every flop back in.
+    pub fn clear_flop_filter(&mut self) {
+        self.flop_filter.clear();
+    }
+
+    /// How many flops a pass would look at, after the dead cards.
+    pub fn flop_filter_count(&self) -> u64 {
+        self.flop_filter.count(self.dead)
+    }
+
     /// How often each statistic comes with each other one.
     pub fn overlap(&self) -> OverlapMatrix {
         breakdown::overlap(&self.effective_range(), &self.cache, self.options)
@@ -1401,23 +1451,38 @@ impl Session {
     /// millions of classifications - so it is run on request rather than on every
     /// keystroke, which is also how Flopzilla does it.
     pub fn preflop(&self) -> PreflopBreakdown {
-        let key = self.preflop_key();
-        if let Some((cached, result)) = self.preflop_cache.borrow().as_ref() {
-            if *cached == key {
-                // The checkmarks may have moved since; the shape has not.
-                let mut result = result.clone();
-                result.hit = result.hit_for(self.checkmarks);
-                return result;
-            }
+        if let Some(result) = self.preflop_cached() {
+            return result;
         }
-        let result = preflop::over_all_flops(
+        let result = preflop::over_flops(
             &self.active().range,
             self.dead,
             self.options,
             self.checkmarks,
+            self.flop_filter,
         );
-        *self.preflop_cache.borrow_mut() = Some((key, result.clone()));
+        let key = self.preflop_key();
+        let mut cache = self.preflop_cache.borrow_mut();
+        cache.retain(|(cached, _)| *cached != key);
+        if cache.len() >= Self::MAX_SEATS {
+            cache.remove(0);
+        }
+        cache.push((key, result.clone()));
         result
+    }
+
+    /// The pass for the seat as it stands, if one has already been run.
+    ///
+    /// `None` means nobody has looked yet - at this range, on these dead cards,
+    /// over these flops. The panel shows that rather than a stale answer.
+    pub fn preflop_cached(&self) -> Option<PreflopBreakdown> {
+        let key = self.preflop_key();
+        let cache = self.preflop_cache.borrow();
+        let (_, result) = cache.iter().find(|(cached, _)| *cached == key)?;
+        // The checkmarks may have moved since; the shape has not.
+        let mut result = result.clone();
+        result.hit = result.hit_for(self.checkmarks);
+        Some(result)
     }
 
     /// The headline of the last pass, re-read for the checkmarks as they stand.
@@ -1427,8 +1492,8 @@ impl Session {
     pub fn preflop_hit(&self) -> Option<f64> {
         let key = self.preflop_key();
         let cache = self.preflop_cache.borrow();
-        let (cached, result) = cache.as_ref()?;
-        (*cached == key).then(|| result.hit_for(self.checkmarks))
+        let (_, result) = cache.iter().find(|(cached, _)| *cached == key)?;
+        Some(result.hit_for(self.checkmarks))
     }
 
     /// What a pass over all the flops depends on. Not the checkmarks: those
@@ -1438,12 +1503,16 @@ impl Session {
         hash ^= self.dead.bits();
         hash = hash.wrapping_mul(0x100_0000_01b3);
         hash ^= u64::from(self.options.one_card_backdoor_flushdraw);
+        for bits in self.flop_filter.bits() {
+            hash ^= u64::from(bits);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
         hash
     }
 
-    /// How often each kind of flop comes, given the dead cards.
+    /// How often each kind of flop comes, given the dead cards and the ticks.
     pub fn flop_breakdown(&self) -> FlopBreakdown {
-        flops::breakdown(self.dead)
+        flops::filtered_breakdown(self.dead, self.flop_filter)
     }
 
     /// Equity for each combo of the active range, for the equity matrix and graph.
@@ -1495,6 +1564,23 @@ impl Session {
             return None;
         }
         equity::equity_by_combo(&villain, &self.effective_range(), &self.board, self.dead)
+    }
+
+    /// Deals a random flop from the ones the ticked groups leave.
+    ///
+    /// With nothing ticked that is every flop, which is the plain random deal.
+    /// With something ticked it is a sample of what the reader said they were
+    /// interested in - deal, look, deal again, without leaving the set.
+    ///
+    /// Returns whether a flop was found; nothing is left when the dead cards
+    /// and the ticks between them rule out every board.
+    pub fn deal_flop(&mut self) -> bool {
+        let Some(flop) = flops::sample_matching(self.flop_filter, self.dead, &mut self.rng) else {
+            return false;
+        };
+        self.board = flop;
+        self.rebuild();
+        true
     }
 
     /// Deals a random flop from one bucket of the flop breakdown.
@@ -1717,6 +1803,7 @@ impl Session {
             },
             compare: self.compare,
             versus: self.versus,
+            flop_groups: self.flop_filter.to_code(to_digit),
             players: self
                 .players
                 .iter()
@@ -1772,11 +1859,12 @@ impl Session {
         session.colour = flags
             .next()
             .and_then(from_digit)
-            .map(|at| at as Colour)
+            .map(in_palette)
             .filter(|colour| *colour != crate::groups::NONE)
             .unwrap_or(DEFAULT_COLOUR);
         session.compare = snapshot.compare;
         session.versus = snapshot.versus;
+        session.flop_filter = FlopFilter::from_code(&snapshot.flop_groups, from_digit);
         for (slot, digit) in session
             .colour_shares
             .iter_mut()
@@ -1926,6 +2014,12 @@ pub struct Snapshot {
     #[cfg_attr(feature = "serde", serde(rename = "vs", alias = "versus"))]
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub versus: Option<usize>,
+    /// Which groups of flops a pass over them was narrowed to, one character
+    /// per axis. Empty - the ordinary case - means every flop.
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "serde", serde(rename = "fg", alias = "flop_groups"))]
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "String::is_empty"))]
+    pub flop_groups: String,
     /// The seats.
     #[cfg_attr(feature = "serde", serde(rename = "p", alias = "players"))]
     pub players: Vec<PlayerSnapshot>,
@@ -2087,7 +2181,7 @@ fn load_groups(saved: &GroupsSnapshot, stats: &ComboStats) -> GroupSet {
     while let (Some(stat), Some(colour)) = (cats.next(), cats.next()) {
         if let (Some(stat), Some(colour)) = (from_digit(stat), from_digit(colour)) {
             if let Some(stat) = StatId::from_index(stat as u8) {
-                groups.paint_stat(stat, colour as Colour, stats);
+                groups.paint_stat(stat, in_palette(colour), stats);
             }
         }
     }
@@ -2100,10 +2194,23 @@ fn load_groups(saved: &GroupsSnapshot, stats: &ComboStats) -> GroupSet {
         };
         let index = high * 64 + low;
         if index < NUM_COMBOS {
-            groups.set(Combo::from_index(index as u16), colour as Colour, stats);
+            groups.set(Combo::from_index(index as u16), in_palette(colour), stats);
         }
     }
     groups
+}
+
+/// A saved colour, or unpainted when the palette no longer runs that far.
+///
+/// The palette has been shortened, and a link written before that carries
+/// colours nothing can now show or unpaint. Reading them as unpainted is the
+/// one reading that leaves the reader somewhere they can work from.
+fn in_palette(saved: usize) -> Colour {
+    if saved <= crate::groups::COLOURS {
+        saved as Colour
+    } else {
+        crate::groups::NONE
+    }
 }
 
 #[cfg(test)]
@@ -2111,7 +2218,7 @@ mod tests {
     use super::*;
     use crate::cards::{Card, HandClass};
     use crate::equity;
-    use crate::groups::colour_from_key;
+    use crate::groups::{colour_from_key, colour_key};
 
     fn session_on(board: &str, range: &str) -> Session {
         let mut session = Session::new();
@@ -2418,6 +2525,40 @@ mod tests {
     }
 
     #[test]
+    fn a_link_from_when_the_palette_was_longer_still_opens() {
+        // Written when there were seven colours: the palette itself is holding
+        // the sixth, one category is painted the seventh, and one hand was
+        // picked out in the sixth.
+        let mut snapshot = Session::new().snapshot();
+        snapshot.flags = "0006".to_owned();
+        snapshot.players[0].range = "AA,KK".to_owned();
+        snapshot.players[0].groups.cats = format!("{}{}", to_digit(0), to_digit(7));
+        snapshot.players[0].groups.picks = format!("{}{}{}", to_digit(0), to_digit(0), to_digit(6));
+
+        // It opens, and everything the palette can no longer show reads as
+        // unpainted - which is somewhere the reader can work from, unlike a
+        // colour with no swatch to take it off with.
+        let restored = Session::restore(&snapshot).expect("an older link still opens");
+        assert_eq!(
+            colour_key(restored.colour()),
+            "blue",
+            "the palette holds a colour it has"
+        );
+        for stat in StatId::all() {
+            assert_ne!(
+                restored.mark(stat).key(),
+                "mixed",
+                "{stat:?} kept a colour the palette cannot show"
+            );
+        }
+        assert_eq!(
+            restored.group_shares()[1..].iter().sum::<f64>(),
+            0.0,
+            "nothing is painted"
+        );
+    }
+
+    #[test]
     fn a_hand_comes_back_from_a_link_as_a_hand() {
         let mut session = session_on("Kh 7d 2c", "22+,A2s+");
         let hand = Combo::parse("AsKs").unwrap();
@@ -2551,6 +2692,143 @@ mod tests {
         // rather than quietly re-used.
         session.set_active_range_text("72o").unwrap();
         assert!(session.preflop_hit().is_none());
+    }
+
+    #[test]
+    fn a_pass_stays_with_its_seat_when_the_reader_moves_to_another() {
+        let mut session = Session::new();
+        session.set_active_range_text("AA,KK,QQ").unwrap();
+        session.set_active(1);
+        session.set_active_range_text("72o,83o").unwrap();
+
+        // Run one on each seat. The second does not displace the first: the
+        // whole reason to run two is to hold them side by side.
+        session.set_active(0);
+        let pairs = session.preflop();
+        session.set_active(1);
+        let rags = session.preflop();
+        assert_ne!(pairs.rows, rags.rows, "two ranges, two answers");
+
+        // Back to the first, and it is still there - the same answer, not a
+        // second sitting of the same work.
+        session.set_active(0);
+        let again = session.preflop_cached().expect("the pass is still here");
+        assert_eq!(again.rows, pairs.rows);
+        assert_eq!(session.preflop_cached().map(|p| p.flops), Some(pairs.flops));
+
+        // Changing what a seat holds retires that seat's pass and leaves the
+        // other one alone.
+        session.set_active_range_text("AA").unwrap();
+        assert!(session.preflop_cached().is_none());
+        session.set_active(1);
+        assert!(
+            session.preflop_cached().is_some(),
+            "the other seat is untouched"
+        );
+    }
+
+    #[test]
+    fn narrowing_to_a_group_of_flops_asks_the_same_question_of_every_seat() {
+        let mut session = Session::new();
+        session.set_active_range_text("AKs").unwrap();
+        session.set_active(1);
+        session.set_active_range_text("22").unwrap();
+        session.set_active(0);
+
+        let everything = session.preflop();
+        assert_eq!(everything.flops, 22_100);
+
+        // Narrow to monotone flops. A pass over them is a different pass, so
+        // the old answer no longer applies - and the new one is over fewer
+        // flops.
+        assert!(session.toggle_flop_group("suits", "monotone"));
+        assert!(
+            session.preflop_cached().is_none(),
+            "a new question, not the old answer"
+        );
+        let monotone = session.preflop();
+        assert_eq!(monotone.flops, session.flop_filter_count());
+        assert!(monotone.flops < everything.flops);
+        // A suited hand flops a flush far more often on three of a suit than
+        // on all flops, which is the sort of thing the narrowing is for.
+        let flushes = |pass: &PreflopBreakdown| pass.row("flush").map_or(0.0, |row| row.fraction);
+        assert!(flushes(&monotone) > flushes(&everything) * 10.0);
+
+        // The narrowing belongs to the table: moving to the other seat asks it
+        // the same question rather than putting every flop back.
+        session.set_active(1);
+        assert_eq!(session.flop_filter_count(), monotone.flops);
+        assert_eq!(session.preflop().flops, monotone.flops);
+
+        // And it survives the round trip through a link, because a shared link
+        // should show what the reader was looking at.
+        let restored = Session::restore(&session.snapshot()).expect("a readable link");
+        assert_eq!(restored.flop_filter_count(), monotone.flops);
+        assert!(restored.flop_filter().contains("suits", "monotone"));
+
+        // Untick it and every flop is back.
+        session.clear_flop_filter();
+        assert_eq!(session.preflop().flops, 22_100);
+    }
+
+    #[test]
+    fn a_dealt_flop_comes_from_the_groups_that_are_ticked() {
+        let mut session = Session::new();
+        session.set_active_range_text("AKs").unwrap();
+
+        // Nothing ticked: any flop at all, which is the plain deal.
+        assert!(session.deal_flop());
+        assert_eq!(session.board().cards().count(), 3);
+
+        // Ticked: every deal lands inside the selection. Twenty of them,
+        // because one could be luck.
+        session.toggle_flop_group("suits", "monotone");
+        session.toggle_flop_group("high-card", "A");
+        for _ in 0..20 {
+            assert!(session.deal_flop(), "the selection is not empty");
+            let board = session.board().to_string();
+            let cards: Vec<&str> = board.split_whitespace().collect();
+            assert_eq!(cards.len(), 3, "{board}");
+            let suits: std::collections::HashSet<char> = cards
+                .iter()
+                .filter_map(|card| card.chars().nth(1))
+                .collect();
+            assert_eq!(suits.len(), 1, "{board} is not monotone");
+            assert!(
+                cards.iter().any(|card| card.starts_with('A')),
+                "{board} is not ace high"
+            );
+        }
+
+        // A selection the dead cards have emptied deals nothing rather than
+        // something outside it.
+        session.clear_flop_filter();
+        session.toggle_flop_group("suits", "monotone");
+        session.set_board_text("").unwrap();
+        session.set_dead(CardSet::parse("2s 3s 4s 5s 6s 7s 8s 9s Ts Js Qs Ks As").unwrap());
+        session.toggle_flop_group("high-card", "A");
+        // Every spade is gone and every remaining monotone flop is a heart,
+        // diamond or club one - so ace-high monotone still exists. Take the
+        // aces too and there is nothing left.
+        session
+            .set_dead(CardSet::parse("2s 3s 4s 5s 6s 7s 8s 9s Ts Js Qs Ks As Ah Ad Ac").unwrap());
+        assert_eq!(session.flop_filter_count(), 0);
+        assert!(!session.deal_flop(), "nothing to deal, and nothing dealt");
+    }
+
+    #[test]
+    fn dead_cards_thin_the_narrowed_flops_too() {
+        let mut session = Session::new();
+        session.set_active_range_text("AKs").unwrap();
+        session.toggle_flop_group("high-card", "A");
+        let wide = session.flop_filter_count();
+
+        // Holding two aces yourself takes ace-high flops off the table in a way
+        // the panel's own count already knows about; the filter agrees with it.
+        session.set_dead(CardSet::parse("As Ad").unwrap());
+        let narrow = session.flop_filter_count();
+        assert!(narrow < wide, "{narrow} should be under {wide}");
+        assert_eq!(session.preflop().flops, narrow);
     }
 
     #[test]

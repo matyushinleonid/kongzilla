@@ -45,6 +45,9 @@ struct ChartView {
     description: String,
     percent: f64,
     size_bb: f32,
+    /// Whether any of what this chart plays is played at no gain, so the
+    /// panel knows whether excluding those hands would do anything at all.
+    has_zero_ev: bool,
 }
 
 /// One seat's tab.
@@ -119,6 +122,11 @@ struct View {
     /// The suits a suited cell is holding, when it is not holding all of them.
     class_suits: Vec<String>,
     checkmarks: Vec<bool>,
+    /// The groups of flops a pass over them is narrowed to, as `axis/group`
+    /// keys. Empty means every flop, which is the ordinary case.
+    flop_groups: Vec<String>,
+    /// How many flops a pass would look at, after the dead cards and the groups.
+    filtered_flops: u64,
     /// Which streets have had their filter pressed.
     streets_on: Vec<bool>,
     /// How many combos are left after the filters up to and including a street.
@@ -355,6 +363,7 @@ impl Engine {
                 },
                 label: chart.label(),
                 description: chart.description(),
+                has_zero_ev: chart.has_zero_ev(),
                 percent: chart.percent(),
                 size_bb: chart.size_bb,
             })
@@ -364,8 +373,8 @@ impl Engine {
 
     /// Replaces the active range with one from the preflop library.
     #[wasm_bindgen(js_name = loadLibrary)]
-    pub fn load_library(&mut self, id: &str) -> bool {
-        self.session.load_library(id)
+    pub fn load_library(&mut self, id: &str, without_zero_ev: bool) -> bool {
+        self.session.load_library_chart(id, without_zero_ev)
     }
 
     /// Adds everything a quick button selects to the active range.
@@ -706,6 +715,28 @@ impl Engine {
         to_json(&self.session.preflop())
     }
 
+    /// The pass for the seat as it stands, as JSON, or `null` if none was run.
+    ///
+    /// The difference from `preflop` is that this never does the work: it says
+    /// what is already known, so moving between seats can put back the answer
+    /// each one already has.
+    #[wasm_bindgen(js_name = preflopCached)]
+    pub fn preflop_cached(&self) -> Option<String> {
+        self.session.preflop_cached().map(|pass| to_json(&pass))
+    }
+
+    /// Adds or removes one group of flops from what a pass looks at.
+    #[wasm_bindgen(js_name = toggleFlopGroup)]
+    pub fn toggle_flop_group(&mut self, axis: &str, group: &str) -> bool {
+        self.session.toggle_flop_group(axis, group)
+    }
+
+    /// Puts every flop back into what a pass looks at.
+    #[wasm_bindgen(js_name = clearFlopFilter)]
+    pub fn clear_flop_filter(&mut self) {
+        self.session.clear_flop_filter();
+    }
+
     /// How often each kind of flop comes, as JSON.
     #[wasm_bindgen(js_name = flopBreakdown)]
     pub fn flop_breakdown(&self) -> String {
@@ -751,6 +782,12 @@ impl Engine {
             .equity_by_combo()
             .map(|result| result.tie)
             .unwrap_or_default()
+    }
+
+    /// Deals a random flop from the ones the ticked groups leave.
+    #[wasm_bindgen(js_name = dealFlop)]
+    pub fn deal_flop(&mut self) -> bool {
+        self.session.deal_flop()
     }
 
     /// Deals a random flop from one bucket of the flop breakdown.
@@ -818,6 +855,13 @@ impl Engine {
                 .map(|suits| String::from_utf8_lossy(suits).into_owned())
                 .collect(),
             checkmarks: StatId::all().map(|s| session.checkmarks().has(s)).collect(),
+            flop_groups: session
+                .flop_filter()
+                .selected()
+                .into_iter()
+                .map(|(axis, group)| format!("{axis}/{group}"))
+                .collect(),
+            filtered_flops: session.flop_filter_count(),
             streets_on: (0..3)
                 .map(|street| session.street_applied(street))
                 .collect(),

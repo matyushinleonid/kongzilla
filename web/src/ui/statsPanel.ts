@@ -28,6 +28,8 @@ import {
   palette,
   repaint,
   runPreflop,
+  runPreflopIfCheap,
+  preflopIsCheap,
   setCompareSeat,
   setCut,
   state,
@@ -35,10 +37,19 @@ import {
 } from "../store";
 import { track } from "../analytics";
 import { pipText, seatName, seatTag } from "./cards";
+import { press, touchOnly } from "./press";
 import type { Block, StatRow } from "../types";
 
 /** Preflop the panel marks what counts as a hit; postflop it paints. */
 let preflopMode = false;
+
+/** What the preflop note says when a pass is over every flop there is. */
+const EVERY_FLOP_NOTE =
+  "Over every flop at once. Tick the hands you would call a hit, and the footer says how often the range makes one.";
+
+/** And when the flops panel has narrowed which flops those are. */
+const NARROWED_NOTE =
+  "Over the flops ticked in the flops panel. Tick the hands you would call a hit, and the footer says how often the range makes one.";
 
 /**
  * A marker being dragged across rows.
@@ -173,8 +184,7 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
   // not only in the footer at the bottom of a long list.
   const preflopNote = document.createElement("p");
   preflopNote.className = "hint preflop-note";
-  preflopNote.textContent =
-    "Over every flop at once. Tick the hands you would call a hit, and the footer says how often the range makes one.";
+  preflopNote.textContent = EVERY_FLOP_NOTE;
 
   const body = document.createElement("div");
   body.className = "stats-body";
@@ -297,6 +307,7 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
     }
     paletteRow.hidden = preflopMode;
     preflopNote.hidden = !preflopMode;
+    preflopNote.textContent = view.flopGroups.length > 0 ? NARROWED_NOTE : EVERY_FLOP_NOTE;
 
     // The eraser has no share: unpainted hands never continue.
     const held = view.colour;
@@ -396,20 +407,43 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
 
     preflopButton.hidden = !preflopMode;
     if (preflopMode) {
+      // Which flops, said on the button that runs the pass: narrowing happens
+      // in another panel, and a reader who has forgotten they narrowed would
+      // otherwise read the answer as being about every flop.
+      const narrowed = view.flopGroups.length > 0;
+      const cheap = preflopIsCheap();
+      const count = view.filteredFlops.toLocaleString();
+      // The label does not get a fourth state for "about to run itself": that
+      // state lasts a quarter of a second, and a button captioned with
+      // something it is not going to be asked to do reads as a broken one.
       preflopButton.textContent = chrome.preflopRunning
-        ? "Working through 22,100 flops…"
+        ? `Working through ${count} flops…`
         : chrome.preflop
           ? "Run it again"
-          : "Calculate over all 22,100 flops";
+          : narrowed
+            ? `Calculate over the ${count} flops picked`
+            : `Calculate over all ${count} flops`;
       preflopButton.disabled = chrome.preflopRunning;
+      preflopButton.title = cheap
+        ? "This one is quick, so it runs itself once the range stops moving."
+        : narrowed
+          ? "The flops panel is narrowing this to the groups ticked there. Tick more groups, or a narrower range, and it stops needing to be asked."
+          : "Every flop the dead cards allow, which is the slow one. Tick groups in the flops panel to narrow it.";
+      // Cheap enough to be nobody's decision: run it and show the numbers. Only
+      // the passes that would freeze the page for a second or more are left for
+      // the reader to ask for.
+      runPreflopIfCheap();
       // Three states, and each says what to do next. A tick with nothing to
       // tick against is what made the whole thing look broken: the mark went
       // on and not one number moved.
       const ticked = view.checkmarks.some(Boolean);
+      const over = narrowed
+        ? `the ${chrome.preflop?.flops.toLocaleString() ?? count} flops picked`
+        : "every flop";
       effective.textContent = !chrome.preflop
-        ? "How the range hits an unknown flop, averaged over every one of them."
+        ? `How the range hits an unknown flop, averaged over ${narrowed ? over : "every one of them"}.`
         : ticked
-          ? `Hits ${(chrome.preflop.hit * 100).toFixed(2)}% of the time — the share of flops where the range makes one of the ticked hands.`
+          ? `Hits ${(chrome.preflop.hit * 100).toFixed(2)}% of the time — the share of ${over} where the range makes one of the ticked hands.`
           : "Tick the statistics that count as hitting, and this says how often the range hits at all.";
     } else {
       // The three numbers Flopzilla puts here, and nothing else. A dump of the
@@ -501,7 +535,7 @@ function createRow(index: number, label: string): RowElements {
   // appears under the pointer the way the suit breakdown does.
   const shift = document.createElement("i");
   shift.className = "shift-hint";
-  shift.textContent = "⇧-click for combos";
+  shift.textContent = touchOnly() ? "hold for combos" : "⇧-click for combos";
   shift.setAttribute("aria-hidden", "true");
   element.append(mark, name, barTrack, versus, shift);
 
@@ -522,7 +556,6 @@ function createRow(index: number, label: string): RowElements {
   // row the pointer then crosses.
   const startPainting = (event: Event) => {
     event.stopPropagation();
-    event.preventDefault();
     const view = state();
     painting = preflopMode
       ? view.checkmarks[index]
@@ -533,7 +566,7 @@ function createRow(index: number, label: string): RowElements {
         : view.colour;
     applyPainted(index);
   };
-  mark.addEventListener("pointerdown", startPainting);
+  press(mark, { act: startPainting });
   mark.addEventListener("pointerenter", () => applyPainted(index));
 
   element.addEventListener("click", (event) => {
@@ -564,13 +597,16 @@ function createRow(index: number, label: string): RowElements {
       repaint();
     }
   });
-  // Shift-click opens the category over the matrix, where its hands can be
-  // painted one at a time - which is what turns the funnel into a gear.
-  element.addEventListener("pointerdown", (event) => {
-    if (!event.shiftKey || preflopMode) return;
-    event.preventDefault();
-    chrome.editing = chrome.editing === index ? null : index;
-    repaint();
+  // Shift-click - or, on a screen with no shift key, a held finger - opens the
+  // category over the matrix, where its hands can be painted one at a time,
+  // which is what turns the funnel into a gear.
+  press(element, {
+    when: () => !preflopMode,
+    hold: (event) => {
+      if ((event.target as HTMLElement).closest(".filter-mark")) return;
+      chrome.editing = chrome.editing === index ? null : index;
+      repaint();
+    },
   });
 
   return { element, mark, label: name, bar, value, versus };

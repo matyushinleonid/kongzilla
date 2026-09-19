@@ -26,8 +26,13 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: beacon
-          image: "{{ .Values.beacon.image.repository }}:{{ .Values.beacon.image.tag | default .Values.image.tag }}"
+          # The same image the site runs. It carries both: nginx and a static
+          # beacon binary, and the command picks which of the two this is. One
+          # image means one build and one tag, so the counter can never be
+          # deployed a version away from the thing it counts.
+          image: {{ include "kongzilla.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/kongzilla-beacon"]
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           ports:

@@ -56,31 +56,58 @@ export interface Context {
   say: (message: string) => void;
   /** The title bar's buttons, pressed rather than reimplemented. */
   actions: Record<string, () => void>;
+  /** Shows the one thing in here that does nothing. */
+  mascot: () => void;
 }
+
+/**
+ * What a press means, in the alphabet the shortcuts are written in.
+ *
+ * `event.key` is what the key *types*, which is the right answer on any Latin
+ * keyboard - a French reader pressing the cap marked A means A, wherever that
+ * cap happens to sit. It is no answer at all on a Cyrillic or Greek layout,
+ * where that same cap types ф and none of the shortcuts exist.
+ *
+ * `event.code` is where the key *sits*, which is the right answer there. So:
+ * the typed character when it is one the shortcuts could be written with, and
+ * the position otherwise. Between them every layout gets the keyboard, and a
+ * reader never has to switch layouts to deal a flop.
+ */
+function meaning(event: KeyboardEvent): string {
+  // A printable ASCII character is one the shortcuts might name, so it is taken
+  // at its word. Space is excluded from the range on purpose: it is named by
+  // its position below, so " " and Space cannot disagree.
+  if (/^[!-~]$/.test(event.key)) return event.key.toLowerCase();
+  return POSITIONS[event.code] ?? event.key;
+}
+
+/** What each physical key types on the layout the shortcuts were written for. */
+const POSITIONS: Record<string, string> = {
+  Space: " ",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Slash: "/",
+  ...Object.fromEntries(
+    Array.from("abcdefghijklmnopqrstuvwxyz", (letter) => [`Key${letter.toUpperCase()}`, letter]),
+  ),
+  ...Object.fromEntries(Array.from("0123456789", (digit) => [`Digit${digit}`, digit])),
+};
 
 /** Whether the key is a plain letter or digit, with no modifier held. */
 function plain(event: KeyboardEvent, key: string): boolean {
   return (
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    event.key.toLowerCase() === key
+    !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && meaning(event) === key
   );
 }
 
 function shifted(event: KeyboardEvent, key: string): boolean {
   return (
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.altKey &&
-    event.shiftKey &&
-    event.key.toLowerCase() === key
+    !event.ctrlKey && !event.metaKey && !event.altKey && event.shiftKey && meaning(event) === key
   );
 }
 
 function control(event: KeyboardEvent, key: string): boolean {
-  return (event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === key;
+  return (event.ctrlKey || event.metaKey) && !event.altKey && meaning(event) === key;
 }
 
 /** Copies text, saying so, because a copy with no feedback looks like nothing. */
@@ -101,7 +128,7 @@ export const BINDINGS: Binding[] = [
     keys: "?",
     group: "Everywhere",
     does: "Show this list",
-    match: (event) => event.key === "?" || (event.shiftKey && event.key === "/"),
+    match: (event) => event.key === "?" || (event.shiftKey && meaning(event) === "/"),
     run: (context) => context.toggleSheet(),
   },
   {
@@ -186,7 +213,7 @@ export const BINDINGS: Binding[] = [
     group: "Statistics",
     does: "Next colour on the palette",
     flopzilla: "toggles filter and delete mode",
-    match: (event) => plain(event, " ") || event.key === " ",
+    match: (event) => plain(event, " "),
     run: () => {
       const colours = palette();
       const at = colours.indexOf(state().colour);
@@ -197,7 +224,7 @@ export const BINDINGS: Binding[] = [
     keys: "1  2  3",
     group: "Statistics",
     does: "Apply or lift the flop, turn or river filter",
-    match: (event) => ["1", "2", "3"].includes(event.key) && !event.ctrlKey && !event.metaKey,
+    match: (event) => ["1", "2", "3"].includes(meaning(event)) && !event.ctrlKey && !event.metaKey,
     run: () => {
       const street = Number(lastKey) - 1;
       if (street >= state().streetsDealt) return;
@@ -210,7 +237,7 @@ export const BINDINGS: Binding[] = [
     group: "Statistics",
     does: "Clear every colour and filter",
     flopzilla: "same",
-    match: (event) => event.altKey && event.key.toLowerCase() === "s",
+    match: (event) => event.altKey && meaning(event) === "s",
     run: () => mutate((engine) => engine.clearFilters()),
   },
   {
@@ -243,7 +270,7 @@ export const BINDINGS: Binding[] = [
     keys: "[  ]",
     group: "Output",
     does: "Previous or next view",
-    match: (event) => event.key === "[" || event.key === "]",
+    match: (event) => meaning(event) === "[" || meaning(event) === "]",
     run: () => {
       const tabs = ["groups", "overlap", "eq-matrix", "eq-graph", "hotness"] as const;
       const at = tabs.indexOf(chrome.output);
@@ -299,6 +326,13 @@ export const BINDINGS: Binding[] = [
     match: (event) => control(event, "o"),
     run: (context) => context.actions.load(),
   },
+  {
+    keys: "A",
+    group: "Other",
+    does: "Show a girl",
+    match: (event) => plain(event, "a"),
+    run: (context) => context.mascot(),
+  },
 ];
 
 /** The key of the press being handled, so a shared binding can tell them apart. */
@@ -333,7 +367,7 @@ export function installHotkeys(context: Context): () => void {
     }
     if (reserved(event)) return;
 
-    lastKey = event.key;
+    lastKey = meaning(event);
     const binding = BINDINGS.find((candidate) => candidate.match(event));
     if (!binding) return;
     // Streets and weights share the arrows; the board only answers the

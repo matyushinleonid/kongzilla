@@ -75,7 +75,7 @@ standalone:
 
 build:
 	docker build --target production --tag kongzilla:local .
-	docker build --target beacon --tag kongzilla-beacon:local .
+	@echo "kongzilla:local - serves the site; run it with /usr/local/bin/kongzilla-beacon to count visits"
 
 clean:
 	rm -rf target web/dist web/dist-standalone web/wasm web/node_modules .cargo-home .npm-cache

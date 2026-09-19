@@ -14,6 +14,7 @@ import { createOutputPanel } from "./ui/outputPanel";
 import { createFlopsPanel } from "./ui/flopsPanel";
 import { loadTheme } from "./ui/theme";
 import { createHotkeySheet, installHotkeys } from "./ui/hotkeys";
+import { createMascot } from "./ui/mascot";
 import { createWorkspace, loadColumns } from "./ui/workspace";
 
 async function main(): Promise<void> {
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
   ]);
 
   const sheet = createHotkeySheet();
+  const mascot = createMascot();
 
   const toast = document.createElement("div");
   toast.className = "toast";
@@ -67,7 +69,14 @@ async function main(): Promise<void> {
   });
 
   root.className = "app";
-  root.replaceChildren(menubar.element, topStrip.element, workspace.element, toast, sheet.element);
+  root.replaceChildren(
+    menubar.element,
+    topStrip.element,
+    workspace.element,
+    toast,
+    sheet.element,
+    mascot.element,
+  );
 
   subscribe(() => {
     workspace.render();
@@ -85,7 +94,8 @@ async function main(): Promise<void> {
     stepStreet: board.stepStreet,
     toggleSheet: sheet.toggle,
     actions: menubar.actions,
-    escape: () => dismissOne(sheet.close),
+    mascot: mascot.toggle,
+    escape: () => dismissOne(sheet.close) || mascot.close(),
     say: (message) => {
       toast.textContent = message;
       toast.hidden = false;

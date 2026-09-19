@@ -16,7 +16,16 @@
 
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
-import { boot, chrome, mutate, restore, snapshot, state, statDefs } from "../src/store";
+import {
+  boot,
+  chrome,
+  classLabels,
+  mutate,
+  restore,
+  snapshot,
+  state,
+  statDefs,
+} from "../src/store";
 import { createBoardPanel } from "../src/ui/boardPanel";
 import { dismissOne, installDismiss } from "../src/ui/dismiss";
 import { createFlopsPanel } from "../src/ui/flopsPanel";
@@ -41,6 +50,8 @@ interface App {
   flops: HTMLElement;
   sheet: HTMLElement;
   press: (key: string, init?: KeyboardEventInit) => void;
+  /** How many times the key nobody is told about has been pressed. */
+  mascotShown: () => number;
   teardown: () => void;
 }
 
@@ -100,6 +111,7 @@ async function open(): Promise<App> {
   document.body.replaceChildren(...panels.map((panel) => panel.element), sheet.element);
 
   const render = () => panels.forEach((panel) => panel.render());
+  let mascotShown = 0;
   const stopDismiss = installDismiss();
   const uninstall = installHotkeys({
     randomBoard: board.randomBoard,
@@ -109,6 +121,9 @@ async function open(): Promise<App> {
     escape: () => dismissOne(sheet.close),
     say: () => {},
     actions: menubar.actions,
+    mascot: () => {
+      mascotShown += 1;
+    },
   });
   render();
 
@@ -126,6 +141,7 @@ async function open(): Promise<App> {
       window.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true, ...init }));
       render();
     },
+    mascotShown: () => mascotShown,
     teardown: () => {
       uninstall();
       stopDismiss();
@@ -178,6 +194,13 @@ function cell(app: App, label: string): HTMLElement {
   );
   if (!found) throw new Error(`no cell called ${label}`);
   return found;
+}
+
+/** Where a hand class sits in the 169, by the name on its cell. */
+function classIndex(label: string): number {
+  const at = classLabels.indexOf(label);
+  if (at < 0) throw new Error(`no hand class called ${label}`);
+  return at;
 }
 
 /** How a cell is drawn: in the range, how much of it, and how much got through. */
@@ -265,6 +288,39 @@ function suitClick(popup: HTMLElement, name: string): void {
   element.dispatchEvent(new window.MouseEvent("pointerdown", { bubbles: true }));
   window.dispatchEvent(new window.Event("pointerup"));
   app!.render();
+}
+
+/**
+ * One touch event, which jsdom has no class for.
+ *
+ * It knows `MouseEvent` and not `PointerEvent`, and what tells the two kinds of
+ * press apart is `pointerType` - so the field is put on by hand. Everything the
+ * app reads off a touch is here, which is what makes the mobile behaviour
+ * testable at all without a phone.
+ */
+function finger(
+  element: EventTarget,
+  name: string,
+  init: { clientX?: number; clientY?: number; id?: number } = {},
+): Event {
+  const event = new window.MouseEvent(name, {
+    bubbles: true,
+    cancelable: true,
+    clientX: init.clientX ?? 0,
+    clientY: init.clientY ?? 0,
+  });
+  Object.defineProperty(event, "pointerType", { value: "touch" });
+  Object.defineProperty(event, "pointerId", { value: init.id ?? 1 });
+  element.dispatchEvent(event);
+  return event;
+}
+
+/** A finger that lands, waits, and lets go without going anywhere. */
+function tap(element: EventTarget, at: { clientX?: number; clientY?: number } = {}): Event {
+  const down = finger(element, "pointerdown", at);
+  finger(element, "pointerup", at);
+  element.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  return down;
 }
 
 /** How much of a cell the hover band covers, as a fraction. */
@@ -860,6 +916,16 @@ describe("drawing on the matrix", () => {
     expect(suited.querySelectorAll(".suit-cell:not(.absent)")).toHaveLength(4);
     expect(suited.querySelectorAll(".suit-cell.absent")).toHaveLength(0);
     expect([...suits(suited).keys()].every((name) => name[1] === name[3])).toBe(true);
+
+    // Two cards of different suits need saying which axis is which card, so
+    // each header carries a rank. One suit across both cards does not, and
+    // naming a card there would claim the suit belongs to that one. The popup
+    // is one element reused, so each reading is taken while it is showing.
+    const heads = (label: string) =>
+      Array.from(peek(app, label).querySelectorAll(".suit-head")).map((node) => node.textContent);
+    expect(heads("AKs")).toEqual(["♠", "♥", "♦", "♣"]);
+    expect(heads("QQ")).toEqual(["", "Q♠", "Q♥", "Q♦", "Q♣", "Q♠", "Q♥", "Q♦", "Q♣"]);
+    expect(heads("AKo")).toEqual(["", "K♠", "K♥", "K♦", "K♣", "A♠", "A♥", "A♦", "A♣"]);
   });
 
   test("escape closes a pinned breakdown before anything else", async () => {
@@ -1095,10 +1161,12 @@ describe("the equity matrix", () => {
     const app = await open();
     // A dice character lives in a Unicode block plenty of systems have no font
     // for, and a missing glyph renders as an empty box - so it is an SVG.
-    const random = app.board.querySelector<HTMLElement>(".board-actions .btn:last-of-type")!;
-    expect(random.textContent).toContain("Random");
-    expect(random.querySelector("svg.die")).not.toBeNull();
-    expect(random.querySelectorAll(".die-pip")).toHaveLength(5);
+    // Dealing lives with the flops: one button for the whole selection at the
+    // top, one per row for that row's kind.
+    const any = app.flops.querySelector<HTMLElement>(".deal-any")!;
+    expect(any.querySelector("svg.die")).not.toBeNull();
+    expect(any.querySelectorAll(".die-pip")).toHaveLength(5);
+    expect(any.title).toMatch(/Deal a random flop/);
 
     const deal = app.flops.querySelector<HTMLButtonElement>(".deal-flop")!;
     expect(deal.querySelector("svg.die")).not.toBeNull();
@@ -1107,6 +1175,11 @@ describe("the equity matrix", () => {
     deal.click();
     app.render();
     expect(state().boardCards).toHaveLength(3);
+
+    // And the board panel no longer carries a row of buttons for either of
+    // them: clearing is a cross in its heading.
+    expect(app.board.querySelector(".board-actions")).toBeNull();
+    expect(app.board.querySelector(".panel-head .board-clear")).not.toBeNull();
   });
 
   test("suits are pips wherever a hand is printed", async () => {
@@ -1292,11 +1365,20 @@ describe("two seats and their filters", () => {
     expect(seats[1].querySelector(".seat-bar")!.classList.contains("seat-1")).toBe(true);
 
     // The graph has to agree, and go on agreeing when the selection changes.
+    // Whichever seat is selected draws solid and the other dashed, so a stretch
+    // where the two curves agree still reads as two lines rather than as one
+    // that changes colour half way.
     const curves = () =>
       Array.from(app.output.querySelectorAll<SVGElement>(".eq-graph .curve")).map((element) =>
         element.getAttribute("class")!,
       );
-    expect(curves().sort()).toEqual(["curve seat-curve-0", "curve seat-curve-1"]);
+    const seatOf = (className: string) => className.match(/seat-curve-\d/)![0];
+    const dashed = () =>
+      curves()
+        .filter((name) => name.includes("curve-versus"))
+        .map(seatOf);
+    expect(curves().map(seatOf).sort()).toEqual(["seat-curve-0", "seat-curve-1"]);
+    expect(dashed()).toEqual(["seat-curve-1"]);
     const keys = () =>
       Array.from(app.output.querySelectorAll(".eq-key")).map((element) => element.className);
     expect(keys()).toContain("eq-key key-seat-0");
@@ -1304,7 +1386,10 @@ describe("two seats and their filters", () => {
 
     seats[1].click();
     app.render();
-    expect(curves().sort()).toEqual(["curve seat-curve-0", "curve seat-curve-1"]);
+    expect(curves().map(seatOf).sort()).toEqual(["seat-curve-0", "seat-curve-1"]);
+    // The colours stay with their seats; only which one is dashed follows the
+    // selection, because the dash says "the other one" and not "seat B".
+    expect(dashed()).toEqual(["seat-curve-0"]);
     expect(keys()).toContain("eq-key key-seat-0");
     expect(keys()).toContain("eq-key key-seat-1");
   });
@@ -2758,7 +2843,279 @@ describe("the flops panel", () => {
   });
 });
 
+/*
+ * Features meeting each other.
+ *
+ * Each of these works on its own, and each is checked on its own above. What is
+ * checked here is the seam: a switch in one panel and a button in another that
+ * were built a day apart and have to agree about what the reader asked for.
+ * Nearly everything that has gone wrong in this app has gone wrong in a seam.
+ */
+describe("the palette", () => {
+  test("offers five colours and a way to take them off", async () => {
+    const app = await open();
+    const swatches = Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".swatch"));
+    expect(swatches.map((swatch) => swatch.dataset.colour)).toEqual([
+      "blue",
+      "green",
+      "red",
+      "violet",
+      "amber",
+      "none",
+    ]);
+
+    // Every one of them paints, and each is its own colour on the row it
+    // painted: a swatch the stylesheet has no colour for would draw the marker
+    // in the fallback grey and look like a bug in the range rather than in the
+    // palette.
+    const marks = new Set<string>();
+    for (const swatch of swatches.slice(0, 5)) {
+      swatch.click();
+      app.render();
+      expect(state().colour).toBe(swatch.dataset.colour);
+      marks.add(swatch.style.getPropertyValue("--mark"));
+    }
+    expect(marks.size, "five colours, five values").toBe(5);
+  }, 30000);
+});
+
+describe("one thing on top of another", () => {
+  const stackChip = (app: App, label: string) =>
+    Array.from(app.range.querySelectorAll<HTMLButtonElement>(".stacks .chip")).find(
+      (chip) => chip.textContent === label,
+    )!;
+  const seatChip = (app: App, row: string, label: string) =>
+    Array.from(app.range.querySelectorAll<HTMLButtonElement>(`.action-${row} .seat-chip`)).find(
+      (chip) => chip.textContent === label,
+    )!;
+  const flopRow = (app: App, label: string) =>
+    Array.from(app.flops.querySelectorAll<HTMLElement>(".flop-row")).find(
+      (row) => row.querySelector(".flop-label")?.textContent === label,
+    )!;
+  const tickFlops = (app: App, label: string) => {
+    flopRow(app, label).querySelector<HTMLButtonElement>(".flop-pick")!.click();
+    app.render();
+  };
+  const notation = () => state().players[state().active].notation;
+
+  test("excluding 0-EV hands survives a change of depth", async () => {
+    const app = await open();
+    const trim = app.range.querySelector<HTMLButtonElement>(".trim-chip")!;
+
+    seatChip(app, "open", "UTG").click();
+    app.render();
+    const whole100 = notation();
+
+    trim.click();
+    app.render();
+    const trimmed100 = notation();
+    expect(trimmed100).not.toBe(whole100);
+
+    // Changing depth reloads the same spot - and has to reload it the way the
+    // reader asked for it. The two were built a day apart: the switch, and the
+    // depth carrying a spot across.
+    stackChip(app, "80bb").click();
+    app.render();
+    expect(chrome.libraryChart?.id).toBe("mtt-80bb-open-utg");
+    expect(chrome.libraryNoZeroEv, "the switch is not undone by a depth").toBe(true);
+    const trimmed80 = notation();
+
+    // Not "it differs from the hundred": an early open's profitable core barely
+    // moves between depths, because the hands that move are exactly the ones
+    // this leaves out. What has to hold is that the eighty came in trimmed -
+    // which is told by turning the switch off and watching it grow.
+    trim.click();
+    app.render();
+    expect(chrome.libraryChart?.id).toBe("mtt-80bb-open-utg");
+    expect(notation(), "the depth arrived trimmed").not.toBe(trimmed80);
+    expect(state().players[state().active].percent).toBeGreaterThan(16);
+  }, 60000);
+
+  test("dead cards, ticked flops and a pass all speak about the same flops", async () => {
+    const app = await open();
+    type(app, "AhKh");
+    app.render();
+
+    tickFlops(app, "A high");
+    const wide = state().filteredFlops;
+    expect(app.flops.textContent).toContain(`${wide.toLocaleString()} of 22,100 flops`);
+
+    // Holding two aces yourself takes ace-high flops off the table, and every
+    // panel that counts them has to say the same number.
+    card(app.strip, "As");
+    card(app.strip, "Ad");
+    app.render();
+    const narrow = state().filteredFlops;
+    expect(narrow).toBeLessThan(wide);
+    expect(app.flops.textContent).toContain(narrow.toLocaleString());
+
+    // The pass is over those flops and no others.
+    await vi.waitFor(() => expect(chrome.preflop).not.toBeNull(), { timeout: 30000 });
+    app.render();
+    expect(chrome.preflop!.flops).toBe(narrow);
+    // Having run, the button offers to run it again rather than repeating the
+    // count; the count is on it before anybody has asked.
+    expect(app.stats.querySelector(".filter-toggle")!.textContent).toBe("Run it again");
+    card(app.strip, "Ad");
+    app.render();
+    expect(chrome.preflop, "moving a dead card retires the pass").toBeNull();
+    expect(app.stats.querySelector(".filter-toggle")!.textContent).toContain(
+      state().filteredFlops.toLocaleString(),
+    );
+  }, 60000);
+
+  test("the flops panel deals from what is ticked, and the ticks wait for the board to clear", async () => {
+    const app = await open();
+    tickFlops(app, "Monotone");
+    tickFlops(app, "A high");
+    const picked = state().filteredFlops;
+    expect(picked).toBeGreaterThan(0);
+
+    // Dealing from the panel deals one of the flops the reader chose.
+    app.flops.querySelector<HTMLButtonElement>(".deal-any")!.click();
+    app.render();
+    const cards = state().boardCards;
+    expect(cards).toHaveLength(3);
+    expect(new Set(cards.map((name) => name[1])).size, "monotone").toBe(1);
+    expect(
+      cards.some((name) => name.startsWith("A")),
+      "ace high",
+    ).toBe(true);
+
+    // With a flop on the table there is nothing to average over, so the ticks
+    // go away - and they are put away rather than thrown away.
+    expect(
+      Array.from(app.flops.querySelectorAll<HTMLElement>(".flop-pick")).every((p) => p.hidden),
+    ).toBe(true);
+    expect(state().flopGroups).toEqual(["suits/monotone", "high-card/A"]);
+
+    app.board.querySelector<HTMLButtonElement>(".board-clear")!.click();
+    app.render();
+    expect(state().board).toBe("");
+    expect(flopRow(app, "Monotone").classList.contains("picked")).toBe(true);
+    expect(state().filteredFlops).toBe(picked);
+  }, 60000);
+
+  test("a link carries the ticked flops along with the seats and the hand", async () => {
+    const app = await open();
+    type(app, "AA,KK");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "22+,A2s+");
+    app.render();
+
+    // A hand, a second range, and a narrowing: three things added at different
+    // times to the same link.
+    app.strip.querySelector<HTMLButtonElement>(".deal-hand")!.click();
+    app.render();
+    card(app.strip, "Qs");
+    card(app.strip, "Qh");
+    app.render();
+    seats2(app)[0].click();
+    app.render();
+    tickFlops(app, "Two-tone");
+    const before = {
+      seats: state().players.length,
+      hand: state().players[2].hand,
+      groups: [...state().flopGroups],
+      flops: state().filteredFlops,
+      range: notation(),
+    };
+
+    const link = snapshot();
+    restore(link);
+    app.render();
+    expect(state().players).toHaveLength(before.seats);
+    expect(state().players[2].hand).toBe(before.hand);
+    expect(state().flopGroups).toEqual(before.groups);
+    expect(state().filteredFlops).toBe(before.flops);
+    expect(notation()).toBe(before.range);
+    expect(flopRow(app, "Two-tone").classList.contains("picked")).toBe(true);
+  }, 60000);
+
+  test("a seat holding a hand cannot be edited, and the flops can still be narrowed", async () => {
+    const app = await open();
+    type(app, "AhKh");
+    app.render();
+
+    app.strip.querySelector<HTMLButtonElement>(".deal-hand")!.click();
+    app.render();
+    card(app.strip, "As");
+    card(app.strip, "Ks");
+    app.render();
+    seats2(app)[2].click();
+    app.render();
+    expect(state().editable).toBe(false);
+
+    // The narrowing belongs to the table rather than to a seat, so a seat with
+    // nothing to edit is no reason for it to stop working.
+    tickFlops(app, "Monotone");
+    expect(state().flopGroups).toEqual(["suits/monotone"]);
+    const monotone = state().filteredFlops;
+
+    // And the hand is a range of one, so its pass is cheap and just runs.
+    await vi.waitFor(() => expect(chrome.preflop).not.toBeNull(), { timeout: 30000 });
+    app.render();
+    expect(chrome.preflop!.flops).toBe(monotone);
+    // One suited hand on three of a suit is a flush rather often.
+    expect(chrome.preflop!.rows.find((row) => row.key === "flush")!.fraction).toBeGreaterThan(0.1);
+  }, 60000);
+});
+
 describe("the keyboard", () => {
+  test("one key does nothing anyone needs, and says so in the sheet", async () => {
+    const app = await open();
+    expect(app.mascotShown()).toBe(0);
+
+    app.press("a");
+    expect(app.mascotShown()).toBe(1);
+
+    // Typing into the range box is typing, not pressing keys at the app: an
+    // easter egg that fires while someone spells out A2s+ is a bug.
+    const notation = app.range.querySelector<HTMLTextAreaElement>(".notation")!;
+    notation.dispatchEvent(new window.Event("focus"));
+    notation.dispatchEvent(new window.KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(app.mascotShown()).toBe(1);
+    notation.dispatchEvent(new window.Event("blur"));
+
+    // It is in the sheet like everything else, under a heading of its own,
+    // because a key that does something has to be findable.
+    app.press("?");
+    const listed = Array.from(app.sheet.querySelectorAll("kbd")).map((key) => key.textContent);
+    expect(listed).toContain("A");
+    const headings = Array.from(app.sheet.querySelectorAll(".sheet-group .sub-title")).map(
+      (node) => node.textContent,
+    );
+    expect(headings).toContain("Other");
+    expect(app.sheet.textContent).toContain("Show a girl");
+    app.press("Escape");
+  }, 30000);
+
+  test("the keys work on a keyboard that is not typing latin", async () => {
+    const app = await open();
+    type(app, "AA,KK");
+
+    // A Cyrillic layout types ф where the shortcuts say R, so the character is
+    // no use and the key has to be recognised by where it sits.
+    app.press("к", { code: "KeyR" });
+    expect(state().boardCards, "R deals a flop from any layout").toHaveLength(3);
+
+    // The same for a modifier combination, which is where this bites hardest:
+    // Alt+S on a Mac types ß even in English.
+    mutate((engine) => engine.setBoard("Kh 7d 2c"));
+    app.render();
+    app.press("ы", { code: "KeyS", altKey: true });
+    app.render();
+    expect(state().filtersEnabled).toBe(false);
+
+    // And a Latin layout that moves the letters about is still read by its
+    // letters: on AZERTY the cap marked A is where Q sits, and it means A.
+    app.press("a", { code: "KeyQ" });
+    expect(app.mascotShown()).toBe(1);
+    app.press("q", { code: "KeyA" });
+    expect(app.mascotShown(), "the cap marked Q is not the cap marked A").toBe(1);
+  }, 30000);
+
   test("carries a whole session without touching the mouse", async () => {
     const app = await open();
     type(app, "AA,KK");
@@ -2958,4 +3315,310 @@ describe("over every flop at once", () => {
     expect(chrome.preflop).toBeNull();
     expect(foot()).toMatch(/averaged over every one of them/);
   }, 60000);
+
+  test("a pass that costs nothing runs itself; one that costs a second waits", async () => {
+    const app = await open();
+    const button = () => app.stats.querySelector<HTMLButtonElement>(".filter-toggle")!;
+    const numbers = () => reading(app, "flushdraw").value;
+
+    // One hand against every flop is twenty thousand classifications. Nobody
+    // should have to ask for that, and nobody is asked.
+    type(app, "AhKh");
+    app.render();
+    await vi.waitFor(() => expect(chrome.preflop).not.toBeNull(), { timeout: 30000 });
+    app.render();
+    expect(numbers()).toMatch(/^\d+\.\d%$/);
+    expect(button().textContent).toBe("Run it again");
+
+    // Every hand against every flop is twenty-six million, which is seconds of
+    // a page that cannot be typed into. That one is asked for.
+    type(app, "22+, A2+, K2+, Q2+, J2+, T2+, 92+, 82+, 72+, 62+, 52+, 42+, 32+");
+    app.render();
+    expect(chrome.preflop).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    app.render();
+    expect(chrome.preflop, "still waiting to be asked").toBeNull();
+    expect(button().textContent).toMatch(/Calculate over all 22,100 flops/);
+
+    // Narrow the flops and the same range becomes cheap, so it stops asking.
+    // Monotone alone is not enough - every hand against eleven hundred flops is
+    // still a million and a half - which is the budget doing its job rather
+    // than a round number nobody checked.
+    const tickFlops = (label: string) => {
+      const row = Array.from(app.flops.querySelectorAll<HTMLElement>(".flop-row")).find(
+        (candidate) => candidate.querySelector(".flop-label")?.textContent === label,
+      )!;
+      row.querySelector<HTMLButtonElement>(".flop-pick")!.click();
+      app.render();
+    };
+    tickFlops("Monotone");
+    expect(chrome.preflop, "a million and a half is still worth asking about").toBeNull();
+    tickFlops("A high");
+    await vi.waitFor(() => expect(chrome.preflop).not.toBeNull(), { timeout: 30000 });
+    app.render();
+    expect(chrome.preflop!.flops).toBe(state().filteredFlops);
+    // A suited hand is a flush far more often on three of a suit, which is the
+    // pass really having been over those flops rather than all of them.
+    expect(chrome.preflop!.rows.find((row) => row.key === "flush")!.fraction).toBeGreaterThan(0.02);
+  }, 90000);
+
+  test("each seat keeps its own pass, so comparing two costs one run each", async () => {
+    const app = await open();
+    const button = () => app.stats.querySelector<HTMLButtonElement>(".filter-toggle")!;
+    const run = async () => {
+      button().click();
+      await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+      app.render();
+    };
+
+    type(app, "AhKh");
+    await run();
+    const suited = reading(app, "flushdraw").value;
+    expect(suited).toMatch(/^\d+\.\d%$/);
+
+    // The other seat has not been looked at, so it offers to look.
+    seats2(app)[1].click();
+    app.render();
+    expect(chrome.preflop).toBeNull();
+    expect(button().textContent).toMatch(/Calculate over all/);
+    type(app, "AhKd");
+    await run();
+    const offsuit = reading(app, "flushdraw").value;
+    expect(offsuit).not.toBe(suited);
+
+    // Back to the first, and its answer is still on screen. Before this, the
+    // pass was thrown away on the way out and had to be run a second time to
+    // read the same two numbers side by side.
+    seats2(app)[0].click();
+    app.render();
+    expect(chrome.preflop, "the pass came back with the seat").not.toBeNull();
+    expect(reading(app, "flushdraw").value).toBe(suited);
+    expect(button().textContent).toMatch(/Run it again/);
+  }, 90000);
+
+  test("ticking flop groups narrows the pass, and the narrowing outlives the seat", async () => {
+    const app = await open();
+    const flopRow = (label: string) =>
+      Array.from(app.flops.querySelectorAll<HTMLElement>(".flop-row")).find(
+        (candidate) => candidate.querySelector(".flop-label")?.textContent === label,
+      )!;
+    const pick = (label: string) => flopRow(label).querySelector<HTMLButtonElement>(".flop-pick")!;
+    const button = () => app.stats.querySelector<HTMLButtonElement>(".filter-toggle")!;
+
+    type(app, "AhKh");
+    expect(button().textContent).toMatch(/all 22,100 flops/);
+
+    // Tick monotone: the pass is now over those flops, and every panel that
+    // says how many says the same number.
+    pick("Monotone").click();
+    app.render();
+    expect(state().flopGroups).toEqual(["suits/monotone"]);
+    const monotone = state().filteredFlops;
+    expect(monotone).toBeGreaterThan(0);
+    expect(monotone).toBeLessThan(22_100);
+    expect(button().textContent).toContain(monotone.toLocaleString());
+    expect(app.flops.textContent).toContain(`${monotone.toLocaleString()} of 22,100 flops`);
+
+    button().click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+    expect(chrome.preflop!.flops).toBe(monotone);
+    // Ace-king suited flops a flush on three of its own suit rather often, and
+    // essentially never across all flops - which is the point of narrowing.
+    expect(chrome.preflop!.rows.find((r) => r.key === "flush")!.fraction).toBeGreaterThan(0.05);
+
+    // The question belongs to the table: the other seat is asked the same one.
+    seats2(app)[1].click();
+    app.render();
+    expect(state().filteredFlops).toBe(monotone);
+    expect(button().textContent).toContain(monotone.toLocaleString());
+
+    // Putting them all back is one press, and the summary says so again.
+    app.flops.querySelector<HTMLButtonElement>(".pick-clear")!.click();
+    app.render();
+    expect(state().flopGroups).toEqual([]);
+    expect(app.flops.textContent).toContain("22,100 flops");
+  }, 90000);
+
+  test("a row says what it is worth under the other headings, and empty ones cannot be ticked", async () => {
+    const app = await open();
+    const flopRow = (label: string) =>
+      Array.from(app.flops.querySelectorAll<HTMLElement>(".flop-row")).find(
+        (candidate) => candidate.querySelector(".flop-label")?.textContent === label,
+      )!;
+    const pick = (label: string) => flopRow(label).querySelector<HTMLButtonElement>(".flop-pick")!;
+    const bars = (label: string) => {
+      const row = flopRow(label);
+      return {
+        kept: row.querySelector<HTMLElement>(".bar")!.style.width,
+        lost: row.querySelector<HTMLElement>(".bar-lost")!.style.width,
+        value: row.querySelector(".stat-value")!.textContent,
+      };
+    };
+
+    // Nothing ticked is every flop, exactly as before the ticking existed: a
+    // full bar and nothing faded behind it.
+    expect(bars("Trips").lost).toBe("0%");
+    expect(pick("Trips").disabled).toBe(false);
+    const rainbow = bars("Rainbow");
+    expect(rainbow.lost).toBe("0%");
+    const unpairedBefore = Number.parseFloat(bars("Unpaired").kept);
+
+    // Tick monotone. A monotone flop cannot be trips - three of a rank is three
+    // of three suits - so that row keeps nothing and stops offering itself.
+    pick("Monotone").click();
+    app.render();
+    expect(bars("Trips").kept).toBe("0%");
+    expect(bars("Trips").lost).not.toBe("0%");
+    expect(pick("Trips").disabled).toBe(true);
+    expect(flopRow("Trips").classList.contains("shut-out")).toBe(true);
+
+    // Its own heading is left alone, so the reader can still see what the other
+    // suits would give them and swap the tick for another.
+    expect(bars("Rainbow")).toEqual(rainbow);
+    expect(pick("Rainbow").disabled).toBe(false);
+    // And the ticked row stays pressable, or there would be no way back.
+    expect(pick("Monotone").disabled).toBe(false);
+
+    // Every other heading is now counted over monotone flops: what survives is
+    // solid, what the tick cost is faded behind it, and the two together are
+    // still the group's share of all 22,100 - which is what lets the rows go
+    // on being read against each other.
+    const unpaired = bars("Unpaired");
+    expect(Number.parseFloat(unpaired.kept)).toBeGreaterThan(0);
+    expect(Number.parseFloat(unpaired.kept)).toBeLessThan(unpairedBefore);
+    expect(Number.parseFloat(unpaired.kept) + Number.parseFloat(unpaired.lost)).toBeCloseTo(
+      unpairedBefore,
+      1,
+    );
+
+    // What a row says in words has to be a share of something the row names.
+    // It used to put the percentage in one sentence with the group's own total,
+    // which it is not a share of: 936 rainbow flops out of 8,788 read as 50%
+    // and was not.
+    const paired = flopRow("Paired, top card").title;
+    expect(paired).toMatch(/1,872 Paired, top card flops in all/);
+    const [, part, percent, whole] = paired.match(
+      /([\d,]+) of them also match[^,]+, which is ([\d.]+)% of the ([\d,]+) flops/,
+    )!;
+    const asNumber = (text: string) => Number(text.replace(/,/g, ""));
+    expect((asNumber(part) / asNumber(whole)) * 100).toBeCloseTo(Number(percent), 1);
+    // And the whole it names is what the other headings leave, which is the
+    // monotone count here - not the 22,100 and not the group's own total.
+    expect(asNumber(whole)).toBe(state().filteredFlops);
+
+    // The solid parts of a heading add up to the flops the tick leaves, because
+    // its groups divide those flops between them.
+    const share = (label: string) => Number.parseFloat(bars(label).kept);
+    const pairing = ["Unpaired", "Paired, top card", "Paired, bottom card", "Trips"];
+    const selected = (state().filteredFlops / 22_100) * 100;
+    expect(pairing.reduce((sum, label) => sum + share(label), 0)).toBeCloseTo(selected, 1);
+  }, 60000);
+});
+
+describe("a finger rather than a mouse", () => {
+  /**
+   * What a phone does differently, tested where the difference lives.
+   *
+   * None of this needs layout: whether the page can scroll comes down to
+   * whether the app takes the gesture, and taking it is an event handler
+   * calling `preventDefault` or not. jsdom cannot scroll, so these check the
+   * decision rather than the scrolling - the part that was wrong.
+   */
+
+  test("a touch that turns into a scroll paints nothing", async () => {
+    const app = await open();
+    // The app opens on a chart, so the cell has to be emptied before a press
+    // can be seen to do anything.
+    type(app, "");
+    app.render();
+    const target = cell(app, "AA");
+    expect(state().classWeights[classIndex("AA")]).toBe(0);
+
+    // The finger lands. Nothing happens yet, and - the whole point - the app
+    // does not take the gesture, so the browser is still free to scroll with it.
+    const down = finger(target, "pointerdown", { clientY: 100 });
+    app.render();
+    expect(down.defaultPrevented, "the app must not claim a touch on the way down").toBe(false);
+    expect(state().classWeights[classIndex("AA")]).toBe(0);
+
+    // The browser decides it was a scroll and says so. Nothing was pressed.
+    finger(target, "pointermove", { clientY: 40 });
+    finger(target, "pointercancel", { clientY: 40 });
+    app.render();
+    expect(state().classWeights[classIndex("AA")]).toBe(0);
+  }, 30000);
+
+  test("a tap paints the cell it lands on", async () => {
+    const app = await open();
+    type(app, "");
+    app.render();
+    tap(cell(app, "AA"));
+    app.render();
+    expect(state().classWeights[classIndex("AA")]).toBe(1);
+
+    // And tapping it again takes it out, the same as clicking twice.
+    tap(cell(app, "AA"));
+    app.render();
+    expect(state().classWeights[classIndex("AA")]).toBe(0);
+  }, 30000);
+
+  test("holding stands in for the shift key", async () => {
+    vi.useFakeTimers();
+    try {
+      const app = await open();
+      type(app, "");
+      app.render();
+
+      // There is no shift on a phone, and the suit breakdown is behind it. A
+      // finger held still opens the same window, and does not paint on the way.
+      finger(cell(app, "AA"), "pointerdown");
+      vi.advanceTimersByTime(600);
+      app.render();
+      expect(chrome.suitCell).toBe(classIndex("AA"));
+      expect(state().classWeights[classIndex("AA")], "a hold is not a press").toBe(0);
+
+      // Letting go after a hold does not then also press: the gesture is spent.
+      finger(cell(app, "AA"), "pointerup");
+      app.render();
+      expect(state().classWeights[classIndex("AA")]).toBe(0);
+
+      // A finger that sets off before the hold is up is going somewhere, so it
+      // is a scroll and not a hold.
+      chrome.suitCell = null;
+      finger(cell(app, "KK"), "pointerdown", { clientY: 200 });
+      finger(cell(app, "KK"), "pointermove", { clientY: 150 });
+      vi.advanceTimersByTime(600);
+      app.render();
+      expect(chrome.suitCell).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 30000);
+
+  test("holding a statistics row opens its combinations", async () => {
+    vi.useFakeTimers();
+    try {
+      const app = await open();
+      card(app.board, "Kh");
+      card(app.board, "7d");
+      card(app.board, "2c");
+      type(app, "AA,KK");
+      app.render();
+
+      const target = row(app, "overpair");
+      finger(target, "pointerdown");
+      vi.advanceTimersByTime(600);
+      app.render();
+      expect(chrome.editing, "the same window shift-clicking opens").toBe(
+        statDefs.find((definition) => definition.key === "overpair")!.index,
+      );
+
+      // The hint offers what this reader can actually do rather than a key they
+      // have not got - which is decided by the screen, not by the row.
+      expect(target.querySelector(".shift-hint")!.textContent).toMatch(/click for combos|hold for/);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 30000);
 });

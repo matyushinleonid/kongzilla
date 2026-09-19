@@ -433,7 +433,13 @@ function equityGraphView(): Node[] {
     // Measured against the whole table rather than one seat, the curve is not
     // any seat's, so it wears nobody's colour and says so in the legend.
     const seat = state().versusSeat;
-    line.setAttribute("class", seat === null ? "curve curve-field" : `curve seat-curve-${seat}`);
+    // Dashed either way: it is the curve drawn under the active seat's, and two
+    // ranges agreeing about their best hands would otherwise draw one line that
+    // appears to change colour where they part.
+    line.setAttribute(
+      "class",
+      seat === null ? "curve curve-versus curve-field" : `curve curve-versus seat-curve-${seat}`,
+    );
     if (seat !== null) line.style.setProperty("--seat", `var(--seat-${seat})`);
     svg.append(line);
   }
@@ -704,7 +710,9 @@ const LADDER_TIERS: Array<{ from: string; name: string; mark: string }> = [
  * holds.
  */
 function preflopGroupsView(): Node[] {
-  if (chrome.preflopRunning) return [note("Working through 22,100 flops…")];
+  const view = state();
+  const waiting = view.filteredFlops.toLocaleString();
+  if (chrome.preflopRunning) return [note(`Working through ${waiting} flops…`)];
 
   const pass = chrome.preflop;
   // A circle of one colour reading "unpainted 100%" is a drawing of nothing.
@@ -713,14 +721,16 @@ function preflopGroupsView(): Node[] {
   if (!pass) {
     return [
       note(
-        "Nothing to divide up yet. Run the pass over all 22,100 flops from the statistics " +
-          "panel, and this becomes what the range makes on a flop it has not seen.",
+        `Nothing to divide up yet. Run the pass over ${
+          view.flopGroups.length > 0 ? `the ${waiting} flops picked` : `all ${waiting} flops`
+        } from the statistics panel, and this becomes what the range makes on a flop it has ` +
+          "not seen.",
       ),
     ];
   }
   if (pass.total <= 0) return [note("Nothing in the range to group.")];
 
-  const checkmarks = state().checkmarks;
+  const checkmarks = view.checkmarks;
   const ticks = statDefs.filter((def) => checkmarks[def.index]).map((def) => def.label);
   const slices = ticks.length > 0 ? hitSlices(pass) : ladderSlices(pass);
   const flops = pass.flops.toLocaleString();
