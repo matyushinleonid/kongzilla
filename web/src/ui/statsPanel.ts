@@ -32,6 +32,7 @@ import {
   repaint,
   runPreflop,
   runPreflopIfCheap,
+  preflopEquityMissing,
   preflopIsCheap,
   setCompareSeat,
   setCut,
@@ -459,16 +460,28 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
       //
       // It comes back the moment the pass stops applying: change the range,
       // the dead cards or the ticked flops and there is something to ask for
-      // again, and the caption says what.
-      preflopButton.hidden = chrome.preflop !== null && !chrome.preflopRunning;
+      // again, and the caption says what. The per-hand equity rides along with
+      // a pass but goes stale on its own terms - it is about this range
+      // against another one - so filling the second seat after a pass leaves
+      // the breakdown standing and the equity never worked out. That is
+      // something to ask for too, and without this the button was not there to
+      // ask it with.
+      const outstanding = chrome.preflop === null || preflopEquityMissing();
+      preflopButton.hidden = !outstanding && !chrome.preflopRunning;
       // The label does not get a state for "about to run itself": that lasts a
       // quarter of a second, and a button captioned with something it is not
       // going to be asked to do reads as a broken one.
+      // Where only the equity is outstanding the caption says so, or a reader
+      // looking at a breakdown that is already on screen would read the button
+      // as one that does nothing.
+      const onlyEquity = chrome.preflop !== null && preflopEquityMissing();
       preflopButton.textContent = chrome.preflopRunning
         ? `Working through ${count} flops…`
-        : narrowed
-          ? `Calculate over the ${count} flops picked`
-          : `Calculate over all ${count} flops`;
+        : onlyEquity
+          ? `Add equity over ${narrowed ? "the" : "all"} ${count} flops`
+          : narrowed
+            ? `Calculate over the ${count} flops picked`
+            : `Calculate over all ${count} flops`;
       preflopButton.disabled = chrome.preflopRunning;
       preflopButton.title = cheap
         ? "This one is quick, so it runs itself once the range stops moving."

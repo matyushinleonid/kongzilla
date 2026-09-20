@@ -1233,16 +1233,16 @@ body {
   margin-top: 2px;
 }
 
-/* Specific enough to beat `.chip { flex: 1 }`: this is a switch rather than one
-   of a row of equals, so it takes its own width. */
-.library-trim .trim-chip {
+/* Specific enough to beat `.chip { flex: 1 }`: these are switches rather than
+   one of a row of equals, so each takes its own width. */
+.library-trim .chip {
   flex: none;
   font-size: 10px;
   line-height: 1.6;
   color: var(--ink-soft);
 }
 
-.trim-chip.on {
+.library-trim .chip.on {
   color: var(--accent);
   border-color: var(--accent);
 }
@@ -1371,6 +1371,24 @@ body {
 
 .library-trim[hidden] {
   display: none;
+}
+
+/*
+ * The opener a row of answers is about. It sits inside the row of chips rather
+ * than beside it: the library is a two-column grid of label and row, and a
+ * third thing in the row is a third thing in the grid - which had this row's
+ * chips starting under the other rows' labels.
+ */
+.opener-pick {
+  flex: none;
+  padding: 1px 2px;
+  font-size: 11px;
+}
+
+/* The switches are a group so they can be rebuilt in one go, but they line up
+   with the one beside them rather than inside a box of their own. */
+.action-switches {
+  display: contents;
 }
 
 /* ----- statistics panel --------------------------------------------------- */

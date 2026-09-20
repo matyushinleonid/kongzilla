@@ -129,11 +129,22 @@ export interface View {
 export interface LibraryEntry {
   id: string;
   stack: string;
-  /** Which row of chips it belongs on: `open` or `defend`. */
-  row: string;
+  /** What it is a strategy for: `open`, `rfi`, `defend` or `isolate`. */
+  spot: string;
+  /** Whose strategy it is. */
+  seat: string;
+  seatLabel: string;
+  /** The seat being answered, where there is one: the opener, or the raiser. */
+  versus: string | null;
+  versusLabel: string | null;
   label: string;
   description: string;
   percent: number;
+  /**
+   * What the solver actually does in this spot, as key, name and how much of
+   * the deck it does it with. The panel puts a switch against each.
+   */
+  actions: Array<[string, string, number]>;
   sizeBb: number;
   /** Whether this chart plays anything at no gain. */
   hasZeroEv: boolean;
@@ -145,6 +156,8 @@ export interface Library {
   stacks: Array<[string, string, string]>;
   rows: Array<[string, string]>;
   entries: LibraryEntry[];
+  /** Every seat, in the order it acts. */
+  seats: Array<[string, string]>;
 }
 
 /** How often each statistic comes with each other one. */

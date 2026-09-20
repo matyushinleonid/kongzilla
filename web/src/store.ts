@@ -47,6 +47,14 @@ export interface Chrome {
    * which it does either way.
    */
   libraryNoZeroEv: boolean;
+  /** Which open the three-bet row is showing, by seat key. */
+  libraryOpener: string;
+  /**
+   * Which of what a solver does in a spot a chart chip puts on the table, by
+   * action key. Absent or true means take it; only an explicit false leaves it
+   * out, so an action nobody has said anything about is in.
+   */
+  actions: Record<string, boolean>;
   /** Whether the flops panel is open or folded to a strip. */
   flopsOpen: boolean;
   /** The bucket the board on the table was dealt from, while it still is it. */
@@ -112,6 +120,8 @@ export const chrome: Chrome = {
   showCombos: false,
   libraryStack: "",
   libraryNoZeroEv: false,
+  libraryOpener: "",
+  actions: {},
   flopsOpen: true,
   dealtBucket: null,
   editing: null,
@@ -138,7 +148,7 @@ export let statDefs: StatDef[] = [];
 export let blockLabels = new Map<string, string>();
 export let rankings: Array<[string, string]> = [];
 export let presets: Array<[key: string, label: string, isValueRange: boolean]> = [];
-export let library: Library = { stacks: [], rows: [], entries: [] };
+export let library: Library = { stacks: [], rows: [], entries: [], seats: [] };
 export let classLabels: string[] = [];
 let paletteKeys: string[] = [];
 
@@ -157,8 +167,8 @@ export async function boot(wasmSource?: BufferSource): Promise<void> {
   blockLabels = new Map(JSON.parse(Engine.blockLabels()) as Array<[string, string]>);
   rankings = JSON.parse(Engine.rankings());
   presets = JSON.parse(Engine.presets());
-  const [stacks, rows, entries] = JSON.parse(Engine.library());
-  library = { stacks, rows, entries };
+  const [stacks, rows, entries, seats] = JSON.parse(Engine.library());
+  library = { stacks, rows, entries, seats };
   chrome.libraryStack = stacks[0]?.[0] ?? "";
   classLabels = JSON.parse(Engine.classLabels());
   paletteKeys = JSON.parse(Engine.palette());
@@ -181,7 +191,7 @@ export async function boot(wasmSource?: BufferSource): Promise<void> {
     // opens on one rather than on an empty matrix.
     // Whole, because the app opens on the solution rather than on a reading of
     // it; the switch in the panel is the reader's to press.
-    engine.loadLibrary("mtt-100bb-open-btn", false);
+    engine.loadLibrary("mtt-100bb-open-btn", "call,raise,allin", false);
     chrome.libraryStack = "100bb";
   }
   refresh();
@@ -482,6 +492,19 @@ export function runPreflop(): void {
 /** Whether the pass over the flops has left per-hand equity standing. */
 export function preflopEquityReady(): boolean {
   return engine.preflopEquityReady();
+}
+
+/**
+ * Whether a pass would work out per-hand equity that is not worked out yet.
+ *
+ * The breakdown and the equity ride along together but go stale apart: a pass
+ * is about one seat's range, and the equity is about that range against
+ * another one. Fill the second seat after running a pass and the breakdown is
+ * still good while the equity was never worked out at all - so there is
+ * something to ask for, even though there is a pass.
+ */
+export function preflopEquityMissing(): boolean {
+  return engine.preflopEquityWork() > 0 && !engine.preflopEquityReady();
 }
 
 /**

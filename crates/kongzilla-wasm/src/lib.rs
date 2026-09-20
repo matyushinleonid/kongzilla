@@ -14,7 +14,7 @@ use kongzilla_core::cards::{Card, CardSet, Combo, HandClass, NUM_CLASSES};
 use kongzilla_core::engine::{Session, Snapshot};
 use kongzilla_core::equity::EquityReport;
 use kongzilla_core::groups::{colour_from_key, colour_key, PALETTE};
-use kongzilla_core::library::{charts, Spot, Stack};
+use kongzilla_core::library::{charts, Actions, Seat, Stack};
 use kongzilla_core::range::Preset;
 use kongzilla_core::ranking::Ranking;
 use kongzilla_core::stats::{ClassifyOptions, StatBlock, StatId, DEFS};
@@ -38,12 +38,22 @@ struct StatDefView {
 struct ChartView {
     id: &'static str,
     stack: &'static str,
-    /// Which row of chips the chart belongs on.
-    row: &'static str,
+    /// What the chart is a strategy for.
+    spot: &'static str,
+    /// Whose strategy it is.
+    seat: &'static str,
+    seat_label: &'static str,
+    /// The seat being answered, where there is one: the opener a three-bet is
+    /// over, or the raise a defence is against.
+    versus: Option<&'static str>,
+    versus_label: Option<&'static str>,
     /// The chip's caption.
     label: &'static str,
     description: String,
     percent: f64,
+    /// What the solver actually does in this spot, as key, name and how much of
+    /// the deck it does it with. The panel puts a switch against each.
+    actions: Vec<(&'static str, &'static str, f64)>,
     size_bb: f32,
     /// Whether any of what this chart plays is played at no gain, so the
     /// panel knows whether excluding those hands would do anything at all.
@@ -358,16 +368,30 @@ impl Engine {
             .iter()
             .map(|s| (s.key(), s.description(), s.game()))
             .collect();
-        let rows: Vec<(&str, &str)> = vec![("open", "Open"), ("defend", "BB vs")];
+        // The seats in the order they act, so a row of them can be shown in it:
+        // the charts arrive grouped by how they were shot rather than by who is
+        // sitting where.
+        let seats: Vec<(&str, &str)> = Seat::ALL.iter().map(|s| (s.key(), s.label())).collect();
+        let rows: Vec<(&str, &str)> = vec![
+            ("open", "Open"),
+            ("defend", "BB vs"),
+            ("facing", "Facing open"),
+        ];
         let entries: Vec<ChartView> = charts()
             .iter()
             .map(|chart| ChartView {
                 id: chart.id,
                 stack: chart.stack.key(),
-                row: match chart.spot {
-                    Spot::Open | Spot::RaiseFirstIn => "open",
-                    Spot::Defend | Spot::Isolate => "defend",
-                },
+                spot: chart.spot.key(),
+                seat: chart.seat.key(),
+                seat_label: chart.seat.label(),
+                actions: chart
+                    .offers()
+                    .into_iter()
+                    .map(|(action, label, percent)| (action.key(), label, percent))
+                    .collect(),
+                versus: chart.versus.map(Seat::key),
+                versus_label: chart.versus.map(Seat::label),
                 label: chart.label(),
                 description: chart.description(),
                 has_zero_ev: chart.has_zero_ev(),
@@ -375,13 +399,19 @@ impl Engine {
                 size_bb: chart.size_bb,
             })
             .collect();
-        to_json(&(stacks, rows, entries))
+        to_json(&(stacks, rows, entries, seats))
     }
 
     /// Replaces the active range with one from the preflop library.
+    ///
+    /// `actions` names which of what the solver does in that spot to take, as
+    /// a comma-separated list - "call,raise" for everything a seat carries on
+    /// with, "raise" for the three-bet alone. Anything unrecognised is ignored,
+    /// so an empty list asks for nothing and gets it.
     #[wasm_bindgen(js_name = loadLibrary)]
-    pub fn load_library(&mut self, id: &str, without_zero_ev: bool) -> bool {
-        self.session.load_library_chart(id, without_zero_ev)
+    pub fn load_library(&mut self, id: &str, actions: &str, without_zero_ev: bool) -> bool {
+        self.session
+            .load_library_chart(id, Actions::parse(actions), without_zero_ev)
     }
 
     /// Adds everything a quick button selects to the active range.
@@ -389,6 +419,32 @@ impl Engine {
     pub fn add_preset(&mut self, key: &str) {
         if let Some(preset) = Preset::from_key(key) {
             self.session.add_preset(preset);
+        }
+    }
+
+    /// Replaces the active range with one chart less another, weight by weight.
+    ///
+    /// Not reached from the interface; see `Session::load_library_less`.
+    #[wasm_bindgen(js_name = loadLibraryLess)]
+    pub fn load_library_less(&mut self, id: &str, minus: &str, without_zero_ev: bool) -> bool {
+        self.session.load_library_less(id, minus, without_zero_ev)
+    }
+
+    /// Takes a chart away from the active range, weight by weight.
+    ///
+    /// Not reached from the interface; see `Session::subtract_library_chart`.
+    #[wasm_bindgen(js_name = subtractLibrary)]
+    pub fn subtract_library(&mut self, id: &str, without_zero_ev: bool) -> bool {
+        self.session.subtract_library_chart(id, without_zero_ev)
+    }
+
+    /// Takes everything a quick button selects away from the active range.
+    ///
+    /// Not reached from the interface; see `Session::subtract_library_chart`.
+    #[wasm_bindgen(js_name = subtractPreset)]
+    pub fn subtract_preset(&mut self, key: &str) {
+        if let Some(preset) = Preset::from_key(key) {
+            self.session.subtract_preset(preset);
         }
     }
 
