@@ -16,6 +16,7 @@ import {
 import { track } from "../analytics";
 import { SUIT_GLYPH } from "./cards";
 import { createMatrix, renderMatrix } from "./matrix";
+import type { LibraryEntry } from "../types";
 
 const BRUSHES: Array<[string, number]> = [
   ["100%", 1],
@@ -23,6 +24,122 @@ const BRUSHES: Array<[string, number]> = [
   ["50%", 0.5],
   ["25%", 0.25],
 ];
+
+/**
+ * Which open a row of answers is about.
+ *
+ * A seat facing an open either folds, calls or three-bets, and naming that spot
+ * takes two seats - who opened, and who is answering. A row of chips carries
+ * one of them, so the opener goes in a dropdown at the head of the same row and
+ * the chips are everybody still to act. Pressing one asks about that seat
+ * against *this* open.
+ *
+ * The dropdown sits inside the chips rather than beside them: the library is a
+ * two-column grid of label and row, and a third thing in the row is a third
+ * thing in the grid - which is what had the chips of this row starting under
+ * the labels of the others.
+ *
+ * The big blind is in this row like everybody else. Its own row above is the
+ * same spots reached the other way round - by opener, for one fixed answerer -
+ * and is kept because that is the question most often asked.
+ */
+interface OpenerPicker {
+  element: HTMLElement;
+  render: (charts: LibraryEntry[]) => void;
+}
+
+/** Which row a chart belongs on, now that a spot can be reached two ways. */
+function inRow(chart: LibraryEntry, row: string): boolean {
+  switch (row) {
+    case "open":
+      return chart.spot === "open" || chart.spot === "rfi";
+    // The big blind's own row, and the limp it isolates. A shortcut: these are
+    // the spots most often asked about, reached without the dropdown below.
+    case "defend":
+      return (chart.spot === "defend" && chart.seat === "bb") || chart.spot === "isolate";
+    // Everybody's answer to an open, the big blind included - the same spots
+    // as the row above, reached along the other axis.
+    default:
+      return chart.spot === "defend";
+  }
+}
+
+/** Where a seat sits in the order of action, for putting a row of them in it. */
+function seatOrder(key: string): number {
+  const at = library.seats.findIndex(([seat]) => seat === key);
+  return at < 0 ? library.seats.length : at;
+}
+
+/** What a chip says, which depends on which of the two seats the row fixes. */
+function captionOf(chart: LibraryEntry, row: string): string {
+  return row === "facing" ? chart.seatLabel : chart.label;
+}
+
+/** The actions the switches are currently asking for, as the engine reads them. */
+function chosenActions(chart: LibraryEntry): string {
+  return chart.actions
+    .map(([key]) => key)
+    .filter((key) => chrome.actions[key] !== false)
+    .join(",");
+}
+
+/**
+ * What a chip would load, as the switches stand.
+ *
+ * The description names the parts rather than the whole when only some are
+ * asked for: "BTN cold calls a CO open" is a different sentence from "BTN
+ * against a CO open", and a tooltip that said the second while loading the
+ * first would be the wrong one.
+ */
+function readingOf(chart: LibraryEntry): { description: string; percent: number } {
+  const taken = chart.actions.filter(([key]) => chrome.actions[key] !== false);
+  const percent = taken.reduce((sum, [, , share]) => sum + share, 0);
+  const names = taken.map(([, what]) => what).join(" and ");
+  return { description: `${chart.description} — ${names || "nothing"}`, percent };
+}
+
+/** The openers a row has charts for, earliest first, without repeats. */ /** The openers a row has charts for, earliest first, without repeats. */ /** The openers a row has charts for, earliest first, without repeats. */
+function openersIn(charts: LibraryEntry[]): Array<[string, string]> {
+  const seen = new Map<string, string>();
+  for (const chart of charts) {
+    if (chart.versus && chart.versusLabel && !seen.has(chart.versus)) {
+      seen.set(chart.versus, chart.versusLabel);
+    }
+  }
+  return [...seen];
+}
+
+/** Which open the chips are about: the reader's choice, or the first there is. */
+function openerFor(charts: LibraryEntry[]): string | null {
+  const openers = openersIn(charts);
+  const chosen = openers.find(([key]) => key === chrome.libraryOpener);
+  return (chosen ?? openers[0])?.[0] ?? null;
+}
+
+function openerPicker(): OpenerPicker {
+  const element = document.createElement("select");
+  element.className = "select opener-pick";
+  element.setAttribute("aria-label", "Which open the answers are to");
+  element.addEventListener("change", () => {
+    chrome.libraryOpener = element.value;
+    repaint();
+  });
+  return {
+    element,
+    render: (charts) => {
+      const openers = openersIn(charts);
+      if (element.options.length !== openers.length) {
+        element.replaceChildren(...openers.map(() => document.createElement("option")));
+      }
+      openers.forEach(([key, label], at) => {
+        element.options[at].value = key;
+        element.options[at].textContent = `vs ${label}`;
+      });
+      const chosen = openerFor(charts);
+      if (chosen) element.value = chosen;
+    },
+  };
+}
 
 export function createRangePanel(): { element: HTMLElement; render: () => void } {
   const panel = document.createElement("section");
@@ -278,6 +395,74 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
     if (loaded) loadChart(loaded);
     else repaint();
   });
+  /*
+   * Which of what the solver does in a spot a chip puts on the table.
+   *
+   * A chart carries its actions apart - what a seat calls, what it raises,
+   * what it shoves - because they are separate decisions with separate
+   * answers. All of them is the range that arrives on the flop; one of them is
+   * a question about that one decision. So there is a switch per action, named
+   * for what the action is in that spot: a call is a limp when nobody has
+   * raised and a cold call when somebody has.
+   *
+   * Only the actions the chart actually uses get a switch. Nobody limps facing
+   * a raise, and nobody shoves a hundred blinds, so a switch for either would
+   * be a switch that does nothing - and the row of them goes away entirely
+   * when the matrix is not holding a chart, like the one beside it.
+   *
+   * Turning off the last one on turns the first one on. Neither would name
+   * nothing at all, and a chip that loads an empty matrix reads as broken.
+   */
+  const switches = (() => {
+    const made = new Map<string, HTMLButtonElement>();
+    const build = (key: string) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `btn chip include-chip include-${key}`;
+      button.addEventListener("click", () => {
+        const chart = library.entries.find(
+          (entry) => entry.id === state().players[state().active].chart,
+        );
+        const keys = chart?.actions.map(([at]) => at) ?? [];
+        const on = keys.filter((at) => chrome.actions[at] !== false);
+        if (on.length === 1 && on[0] === key) {
+          const other = keys.find((at) => at !== key);
+          if (other) chrome.actions[other] = true;
+          else return;
+        }
+        chrome.actions[key] = chrome.actions[key] === false;
+        if (chart) loadChart(chart.id);
+        else repaint();
+      });
+      made.set(key, button);
+      return button;
+    };
+    const element = document.createElement("span");
+    element.className = "action-switches";
+    return {
+      element,
+      render: (chart: LibraryEntry | null) => {
+        // Nothing to choose between where the solver only ever does one thing:
+        // an opening range is raises, and a switch that can never be turned off
+        // is a switch that does nothing.
+        const actions = (chart?.actions ?? []).length > 1 ? (chart?.actions ?? []) : [];
+        element.replaceChildren(
+          ...actions.map(([key, what]) => {
+            const button = made.get(key) ?? build(key);
+            const on = chrome.actions[key] !== false;
+            button.textContent = `${on ? "☑" : "☐"} include ${what}`;
+            button.classList.toggle("on", on);
+            button.setAttribute("aria-pressed", String(on));
+            button.title = on
+              ? `Leave out what this seat ${what.replace(/es$|s$/, "")}s here`
+              : `Take what this seat ${what.replace(/es$|s$/, "")}s here as well`;
+            return button;
+          }),
+        );
+      },
+    };
+  })();
+
   const games = GAMES.map(([game, label]) => {
     const block = document.createElement("div");
     block.className = `library library-${game}`;
@@ -287,7 +472,10 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
     const stackRow = document.createElement("div");
     stackRow.className = "chips stacks";
     block.append(heading, stackRow);
-    const rows = new Map<string, { label: HTMLElement; chips: HTMLElement }>();
+    const rows = new Map<
+      string,
+      { label: HTMLElement; chips: HTMLElement; opener: OpenerPicker | null }
+    >();
     libraries.append(block);
     return { game, block, heading, stackRow, rows };
   });
@@ -298,7 +486,7 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   // game on its own.
   const trimRow = document.createElement("div");
   trimRow.className = "row library-trim";
-  trimRow.append(trim);
+  trimRow.append(switches.element, trim);
   libraries.append(trimRow);
 
   const notation = document.createElement("textarea");
@@ -324,8 +512,18 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   // Loading a chart remembers which one, so the chip can stay lit - and
   // remembers what it put in the range, so the light goes out the moment the
   // range stops being that chart.
+  /**
+   * Puts a chart on the table, in whichever reading the switches ask for.
+   *
+   * Only the answers to an open have two readings; everything else has one and
+   * loads as it is. Cold calls on their own are the whole continuing range less
+   * the three-bet, which the engine does in one go so that the seat is left
+   * holding a chart rather than an edit of one.
+   */
   const loadChart = (id: string) => {
-    mutate((engine) => engine.loadLibrary(id, chrome.libraryNoZeroEv));
+    const chart = library.entries.find((entry) => entry.id === id);
+    const actions = chart ? chosenActions(chart) : "call,raise,allin";
+    mutate((engine) => engine.loadLibrary(id, actions, chrome.libraryNoZeroEv));
     track("chart_loaded");
     repaint();
   };
@@ -351,6 +549,10 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
     // handle dragged, there is no chart to load differently - and a switch that
     // stayed put would be asking about a range it no longer describes.
     trimRow.hidden = from === null || edited;
+    // Only a seat's answer to an open has two readings to choose between, so
+    // the switches go away like the one beside them does when there is nothing
+    // for them to act on - an open has no cold calls in it to leave out.
+    switches.render(from);
     trim.textContent = `${chrome.libraryNoZeroEv ? "☑" : "☐"} exclude 0-EV hands`;
     trim.classList.toggle("on", chrome.libraryNoZeroEv);
     trim.setAttribute("aria-pressed", String(chrome.libraryNoZeroEv));
@@ -381,13 +583,19 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
               // chips were drawn and left the old range sitting there.
               const open = state().players[state().active].chart;
               const showing = open && library.entries.find((entry) => entry.id === open);
+              // The same spot, which takes everything that names one: the row,
+              // the seat, the open being answered where there is one, and which
+              // of a spot's readings was on the table. A three-bet row names two
+              // seats, so matching on one of them would land on a chart about a
+              // different open.
               const sameSpot =
                 showing &&
                 library.entries.find(
                   (entry) =>
                     entry.stack === stack &&
-                    entry.row === showing.row &&
-                    entry.label === showing.label,
+                    entry.spot === showing.spot &&
+                    entry.seat === showing.seat &&
+                    entry.versus === showing.versus,
                 );
               if (sameSpot) loadChart(sameSpot.id);
               else repaint();
@@ -395,15 +603,20 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
             return chip;
           }),
         );
-        // One row of chips per kind of spot: what a seat opens with, and what
-        // the big blind continues with against it.
+        // One row of chips per kind of spot: what a seat opens with, what the
+        // big blind continues with against it, and what everybody else does
+        // when somebody in front of them opens.
         for (const [row, label] of library.rows) {
           const name = document.createElement("span");
           name.className = "field-label action-label";
           name.textContent = label;
           const chips = document.createElement("div");
           chips.className = `chips seats action-${row}`;
-          block.rows.set(row, { label: name, chips });
+          // The answers to an open take two seats to name, and a chip carries
+          // one. The opener goes in a dropdown at the head of the row itself.
+          const opener = row === "facing" ? openerPicker() : null;
+          if (opener) chips.append(opener.element);
+          block.rows.set(row, { label: name, chips, opener });
           block.block.append(name, chips);
         }
       }
@@ -413,16 +626,36 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
       block.block.classList.toggle("open", showing);
 
       for (const [row, entry] of block.rows) {
-        const charts = showing
+        const here = showing
           ? library.entries.filter(
-              (chart) => chart.stack === chrome.libraryStack && chart.row === row,
+              (chart) => chart.stack === chrome.libraryStack && inRow(chart, row),
             )
           : [];
-        // Twenty blinds has no limp to isolate, so a row with nothing in it goes.
-        entry.label.hidden = charts.length === 0;
-        entry.chips.hidden = charts.length === 0;
-        if (entry.chips.children.length !== charts.length) {
+        // The row of answers shows one open's worth at a time; the others are
+        // the whole of what they hold.
+        // In seat order. The charts arrive grouped by how they were shot - the
+        // big blind's answers were solved on their own, long before the rest of
+        // the table's - and a row that listed them that way would put the big
+        // blind first.
+        const charts =
+          row === "facing"
+            ? here
+                .filter((chart) => chart.versus === openerFor(here))
+                .sort((a, b) => seatOrder(a.seat) - seatOrder(b.seat))
+            : here;
+        entry.opener?.render(here);
+        // Twenty blinds has no limp to isolate, and only a hundred has been
+        // solved for what every seat does facing an open, so a row with nothing
+        // in it goes.
+        const empty = here.length === 0;
+        entry.label.hidden = empty;
+        entry.chips.hidden = empty;
+        // The dropdown lives in this row too, and is not one of the chips - so
+        // it is put back at the head of it whenever they are rebuilt.
+        const seats = Array.from(entry.chips.querySelectorAll<HTMLButtonElement>(".seat-chip"));
+        if (seats.length !== charts.length) {
           entry.chips.replaceChildren(
+            ...(entry.opener ? [entry.opener.element] : []),
             ...charts.map(() => {
               const chip = document.createElement("button");
               chip.type = "button";
@@ -439,24 +672,29 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
             }),
           );
         }
-        Array.from(entry.chips.children).forEach((chip, index) => {
-          const chart = charts[index];
-          const button = chip as HTMLButtonElement;
-          button.dataset.chart = chart.id;
-          button.textContent = chart.label;
-          // A chart the switch has nothing to take out of is left exactly as it
-          // is, and says nothing about it: loading it and seeing the range not
-          // move is the answer, and a chip that faded or explained itself only
-          // looked broken. The one that is trimmed does qualify its percentage,
-          // which is of the whole chart and no longer of what would load.
-          const trimmed = chrome.libraryNoZeroEv && chart.hasZeroEv;
-          button.title = trimmed
-            ? `${chart.description} — ${chart.percent.toFixed(1)}% of hands, less the 0-EV ones`
-            : `${chart.description} — ${chart.percent.toFixed(1)}% of hands`;
-          const loaded = chart.id === player.chart;
-          button.classList.toggle("active", loaded);
-          button.classList.toggle("edited", loaded && edited);
-        });
+        Array.from(entry.chips.querySelectorAll<HTMLButtonElement>(".seat-chip")).forEach(
+          (chip, index) => {
+            const chart = charts[index];
+            const button = chip as HTMLButtonElement;
+            button.dataset.chart = chart.id;
+            button.textContent = captionOf(chart, row);
+            // A chart the switch has nothing to take out of is left exactly as it
+            // is, and says nothing about it: loading it and seeing the range not
+            // move is the answer, and a chip that faded or explained itself only
+            // looked broken. The one that is trimmed does qualify its percentage,
+            // which is of the whole chart and no longer of what would load.
+            // What pressing it would actually put on the table, which in the
+            // switches are asking for part of a chart rather than all of it.
+            const reading = readingOf(chart);
+            const trimmed = chrome.libraryNoZeroEv && chart.hasZeroEv;
+            button.title = trimmed
+              ? `${reading.description} — ${reading.percent.toFixed(1)}% of hands, less the 0-EV ones`
+              : `${reading.description} — ${reading.percent.toFixed(1)}% of hands`;
+            const loaded = chart.id === player.chart;
+            button.classList.toggle("active", loaded);
+            button.classList.toggle("edited", loaded && edited);
+          },
+        );
       }
 
       for (const chip of Array.from(block.stackRow.children) as HTMLButtonElement[]) {

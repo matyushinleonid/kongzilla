@@ -91,6 +91,8 @@ async function open(): Promise<App> {
     dealtBucket: null,
     preflop: null,
     preflopRunning: false,
+    libraryOpener: "",
+    actions: {},
     boardCards: [],
     visible: 0,
   });
@@ -371,6 +373,14 @@ function tab(app: App, key: string): HTMLButtonElement {
   return app.output.querySelector<HTMLButtonElement>(`.output-tab[data-tab="${key}"]`)!;
 }
 
+/** Empties the matrix, by the button that says so. */
+function clearRange(app: App): void {
+  Array.from(app.range.querySelectorAll<HTMLButtonElement>(".btn.quick"))
+    .find((button) => button.textContent === "Clear")!
+    .click();
+  app.render();
+}
+
 /** A library chip, by its row and label. */
 function chip(app: App, game: string, row: string, label: string): HTMLButtonElement {
   const found = Array.from(
@@ -640,7 +650,7 @@ describe("numbers you can check on paper", () => {
 describe("drawing on the matrix", () => {
   test("painting, weighting and reading a range back as text", async () => {
     const app = await open();
-    app.range.querySelector<HTMLButtonElement>(".quick:last-of-type")!.click(); // Clear
+    clearRange(app);
     app.render();
     expect(state().players[state().active].combos).toBe(0);
     expect(app.range.querySelectorAll(".cell.on")).toHaveLength(0);
@@ -1299,8 +1309,8 @@ describe("the output views", () => {
     // rather than drawing an empty chart.
     for (const [key, wanted] of [
       ["overlap", /Pick a flop/],
-      ["eq-matrix", /comes from the pass over flops/],
-      ["eq-graph", /comes from the pass over flops/],
+      ["eq-matrix", /Needs something to measure against/],
+      ["eq-graph", /Needs something to measure against/],
       ["hotness", /Needs a dealt hand/],
     ] as const) {
       tab(app, key).click();
@@ -1402,6 +1412,217 @@ describe("equity before the flop", () => {
   });
 });
 
+describe("what a seat does facing an open", () => {
+  const row = (app: App) => app.range.querySelector<HTMLElement>(".action-facing")!;
+  const opener = (app: App) => app.range.querySelector<HTMLSelectElement>(".opener-pick")!;
+  const chips = (app: App) =>
+    Array.from(row(app).querySelectorAll<HTMLButtonElement>(".seat-chip"));
+  /** One chip in the row of answers, by the seat on it. */
+  const answer = (app: App, label: string) =>
+    chips(app).find((element) => element.textContent === label)!;
+  /** One action switch, by the action it is for. There is none where the
+   *  solver only ever does one thing, so this can come back null. */
+  const include = (app: App, which: string) =>
+    app.range.querySelector<HTMLButtonElement>(`.include-${which}`);
+  const percent = () => state().players[state().active].percent;
+  const openMtt = async () => {
+    const app = await open();
+    stack(app, "mtt", "100bb").click();
+    app.render();
+    return app;
+  };
+  const facing = (app: App, seat: string) => {
+    opener(app).value = seat;
+    opener(app).dispatchEvent(new window.Event("change", { bubbles: true }));
+    app.render();
+  };
+
+  test("the opener is a dropdown and the chips are everybody who answers it", async () => {
+    const app = await openMtt();
+
+    expect(Array.from(opener(app).options).map((o) => o.textContent)).toEqual([
+      "vs UTG",
+      "vs UTG1",
+      "vs LJ",
+      "vs HJ",
+      "vs CO",
+      "vs BTN",
+      "vs SB",
+    ]);
+    // Everybody still to act, in the order they act - the big blind included,
+    // whose answers were solved on their own long before the rest of these.
+    expect(chips(app).map((element) => element.textContent)).toEqual([
+      "UTG1",
+      "LJ",
+      "HJ",
+      "CO",
+      "BTN",
+      "SB",
+      "BB",
+    ]);
+
+    // The dropdown lives inside the row of chips, so the row lines up with the
+    // others rather than starting under their labels.
+    expect(opener(app).parentElement).toBe(row(app));
+    expect(row(app).firstElementChild).toBe(opener(app));
+
+    facing(app, "btn");
+    expect(chips(app).map((element) => element.textContent)).toEqual(["SB", "BB"]);
+  });
+
+  test("a switch per action, and the parts add up to the whole", async () => {
+    const app = await openMtt();
+    facing(app, "co");
+    answer(app, "BTN").click();
+    app.render();
+    const whole = percent();
+
+    // Facing an open a seat calls some hands and raises others. Both switches
+    // are on to begin with, which is the range that arrives on the flop.
+    expect(include(app, "call")!.textContent).toBe("☑ include cold calls");
+    expect(include(app, "raise")!.textContent).toBe("☑ include 3-bets");
+    expect(include(app, "allin"), "nobody shoves a hundred blinds").toBeNull();
+
+    include(app, "call")!.click();
+    app.render();
+    const raises = percent();
+    expect(raises).toBeLessThan(whole);
+    expect(drawn(app, "AA").on, "aces always go back in").toBe(true);
+
+    include(app, "call")!.click();
+    include(app, "raise")!.click();
+    app.render();
+    const calls = percent();
+    expect(calls).toBeGreaterThan(0);
+    expect(calls + raises).toBeCloseTo(whole, 1);
+    expect(drawn(app, "AA").on, "so there are none left to call with").toBe(false);
+
+    // Still that spot's chart rather than an edit of one.
+    const lit = app.range.querySelector<HTMLElement>(".action-facing .seat-chip.active")!;
+    expect(lit.textContent).toBe("BTN");
+    expect(lit.classList.contains("edited")).toBe(false);
+  });
+
+  test("turning off the last switch turns the other one on", async () => {
+    const app = await openMtt();
+    facing(app, "co");
+    answer(app, "BTN").click();
+    app.render();
+
+    // Neither would name nothing at all, and a chip that loads an empty matrix
+    // reads as a broken chip.
+    include(app, "raise")!.click();
+    app.render();
+    expect(chrome.actions.raise).toBe(false);
+    expect(chrome.actions.call).not.toBe(false);
+
+    include(app, "call")!.click();
+    app.render();
+    expect(chrome.actions.call).toBe(false);
+    expect(chrome.actions.raise).toBe(true);
+    expect(percent()).toBeGreaterThan(0);
+  });
+
+  test("a chip says what pressing it would load", async () => {
+    const app = await openMtt();
+    facing(app, "co");
+    answer(app, "BTN").click();
+    app.render();
+    expect(answer(app, "BTN").title).toMatch(/cold calls and 3-bets/);
+    const whole = Number(answer(app, "BTN").title.match(/([\d.]+)% of hands/)![1]);
+    expect(whole).toBeCloseTo(percent(), 0);
+
+    include(app, "call")!.click();
+    app.render();
+    expect(answer(app, "BTN").title).toMatch(/— 3-bets/);
+    expect(answer(app, "BTN").title).not.toMatch(/cold calls/);
+    const raises = Number(answer(app, "BTN").title.match(/([\d.]+)% of hands/)![1]);
+    expect(raises).toBeLessThan(whole);
+  });
+
+  test("the big blind's own row has three-bets in it too", async () => {
+    const app = await openMtt();
+    // The shortcut row reaches the same spots the other way round, so the
+    // switches belong to it as much as to the row below: a defence is calls
+    // and three-bets, and which of those a reader wants is theirs to say.
+    chip(app, "mtt", "defend", "BTN").click();
+    app.render();
+    const defends = percent();
+    expect(include(app, "call")).not.toBeNull();
+    expect(include(app, "raise")).not.toBeNull();
+
+    include(app, "call")!.click();
+    app.render();
+    const raises = percent();
+    expect(raises).toBeLessThan(defends);
+    expect(drawn(app, "AA").on).toBe(true);
+
+    include(app, "call")!.click();
+    include(app, "raise")!.click();
+    app.render();
+    expect(percent() + raises).toBeCloseTo(defends, 1);
+
+    // And the same spot is in both rows, so it is the same chart.
+    const fromRow = state().players[state().active].chart;
+    facing(app, "btn");
+    answer(app, "BB").click();
+    app.render();
+    expect(state().players[state().active].chart).toBe(fromRow);
+  });
+
+  test("shoving is a switch where the solver shoves", async () => {
+    const app = await open();
+    stack(app, "mtt", "20bb").click();
+    app.render();
+
+    // Twenty blinds is where it starts: the small blind limps some of what it
+    // plays, raises some and shoves the rest, so all three are switches.
+    chip(app, "mtt", "open", "SB").click();
+    app.render();
+    const whole = percent();
+    expect(include(app, "call")!.textContent).toBe("☑ include limps");
+    expect(include(app, "raise")!.textContent).toBe("☑ include opens");
+    expect(include(app, "allin")!.textContent).toBe("☑ include pushes");
+
+    include(app, "call")!.click();
+    include(app, "raise")!.click();
+    app.render();
+    const shoves = percent();
+    expect(shoves).toBeGreaterThan(0);
+    expect(shoves).toBeLessThan(whole);
+    expect(
+      answer(app, "SB") ?? app.range.querySelector(".action-open .seat-chip.active"),
+    ).not.toBeNull();
+  });
+
+  test("no switches where the solver only ever does one thing", async () => {
+    const app = await openMtt();
+    // An opening range at a hundred blinds is raises and nothing else, so
+    // there is no choice to offer - and a switch that can never come off is a
+    // switch that does nothing.
+    chip(app, "mtt", "open", "BTN").click();
+    app.render();
+    expect(include(app, "raise")).toBeNull();
+    expect(app.range.querySelector<HTMLElement>(".trim-chip")!.hidden).toBe(false);
+
+    // Painting over the range takes the whole row away, switches and all.
+    facing(app, "co");
+    answer(app, "BTN").click();
+    app.render();
+    expect(include(app, "call")).not.toBeNull();
+    type(app, "22+");
+    expect(app.range.querySelector<HTMLElement>(".library-trim")!.hidden).toBe(true);
+  });
+
+  test("the row says what it is facing", async () => {
+    const app = await openMtt();
+    const labels = Array.from(
+      app.range.querySelectorAll<HTMLElement>(".library-mtt .action-label"),
+    ).map((element) => element.textContent);
+    expect(labels).toEqual(["Open", "BB vs", "Facing open"]);
+  });
+});
+
 describe("editing a chart rather than replacing it", () => {
   const cutHandle = (app: App) => app.range.querySelector<HTMLInputElement>(".slider-cut")!;
   const topHandle = (app: App) => app.range.querySelector<HTMLInputElement>(".slider-top")!;
@@ -1489,10 +1710,7 @@ describe("editing a chart rather than replacing it", () => {
     expect(seat().classList.contains("edited")).toBe(true);
 
     // Clearing is starting again rather than editing, so the light goes out.
-    Array.from(app.range.querySelectorAll<HTMLButtonElement>(".btn.quick"))
-      .find((button) => button.textContent === "Clear")!
-      .click();
-    app.render();
+    clearRange(app);
     expect(app.range.querySelectorAll(".seat-chip.active")).toHaveLength(0);
     expect(trim().hidden).toBe(true);
   });
@@ -1566,6 +1784,49 @@ describe("equity before the flop, from both sides", () => {
     // the wider range, so its pairs are the weaker side of the same match-up.
     expect(fromB.get("22")).toBeLessThan(fromA.get("22")!);
     expect(fromB.get("AA")).toBeGreaterThan(70);
+  });
+
+  test("filling the second seat after a pass asks for the equity again", async () => {
+    const app = await open();
+    type(app, "22+, AQs+, AKo");
+
+    // A pass with nobody to measure against is a breakdown and nothing else,
+    // and the equity views say so rather than pointing at a button.
+    const run = () =>
+      Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".btn")).find((button) =>
+        button.textContent?.startsWith("Calculate over"),
+      );
+    tab(app, "eq-matrix").click();
+    app.render();
+    expect(app.output.textContent).toMatch(/Needs something to measure against/);
+    run()!.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+    expect(app.output.querySelectorAll(".eq-cell")).toHaveLength(0);
+
+    // Now fill the other seat. The breakdown is still good - it is about this
+    // seat's range, which has not moved - but the equity is about this range
+    // against another one and was never worked out at all. So there is
+    // something to ask for, and a button to ask it with: without this the
+    // reader was left with views that pointed at a button that was not there.
+    seats2(app)[1].click();
+    app.render();
+    type(app, "22+, A2s+, K9s+, A8o+, KJo+");
+    seats2(app)[0].click();
+    app.render();
+
+    expect(app.output.textContent).toMatch(/comes from the pass over flops/);
+    const again = Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".btn")).find((button) =>
+      button.textContent?.startsWith("Add equity over"),
+    );
+    expect(again, "the button comes back, saying what is left to do").toBeDefined();
+
+    again!.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+    expect(app.output.querySelectorAll(".eq-cell")).toHaveLength(169);
+    // And the breakdown it already had is still there.
+    expect(chrome.preflop).not.toBeNull();
   });
 
   test("a dealt hand is something to measure against, from either side", async () => {
@@ -2720,7 +2981,7 @@ describe("the numbers on screen agree with each other", () => {
 
   test("an empty range says nothing rather than something wrong", async () => {
     const app = await open();
-    app.range.querySelector<HTMLButtonElement>(".quick:last-of-type")!.click();
+    clearRange(app);
     app.render();
     card(app.board, "Qs");
     card(app.board, "2h");
@@ -3195,10 +3456,7 @@ describe("the library", () => {
     expect(app.range.querySelector<HTMLElement>(".library-trim")!.hidden).toBe(true);
 
     // Clearing is starting again rather than editing, so the light does go out.
-    Array.from(app.range.querySelectorAll<HTMLButtonElement>(".btn.quick"))
-      .find((button) => button.textContent === "Clear")!
-      .click();
-    app.render();
+    clearRange(app);
     expect(app.range.querySelectorAll(".seat-chip.active")).toHaveLength(0);
   });
 

@@ -22,6 +22,7 @@ import {
   peekAt,
   overlap,
   palette,
+  preflopEquityMissing,
   preflopEquityReady,
   revision,
   repaint,
@@ -146,9 +147,14 @@ export function createOutputPanel(): { element: HTMLElement; render: () => void 
     // comes in scrolled to the top, and a wheel that moves the rows under a
     // still pointer sets off a repaint per row it crosses - so scrolling it
     // fought back. Pointing at a hand now moves a class and nothing else.
+    // Everything these views are drawn from. The equity is in here on its own
+    // account: it rides along with a pass but goes stale on its own terms, so
+    // a pass that was already standing can gain one without anything else here
+    // moving - and the views would have gone on showing the note that asked
+    // for it.
     const built = `${chrome.output}/${revision()}/${chrome.showCombos}/${chrome.overlapAxes}/${
       chrome.preflop === null ? "none" : "pass"
-    }/${chrome.preflopRunning}`;
+    }/${chrome.preflopRunning}/${preflopEquityReady()}`;
     if (built !== lastBuilt) {
       lastBuilt = built;
       body.replaceChildren(...view());
@@ -210,7 +216,10 @@ function preflopEquityGate(): Node[] | null {
   if (state().board !== "") return null;
   if (preflopEquityReady()) return null;
   if (chrome.preflopRunning) return [note("Working through the flops…")];
-  if (state().players.length < 2) {
+  // A session always has a second seat; what matters is whether anything is in
+  // it. Counting seats said "run the pass" to a reader who had nothing to
+  // measure against, and the pass would have come back with nothing.
+  if (!preflopEquityMissing()) {
     return [
       note("Needs something to measure against: a hand in the dead cards, or both seats filled."),
     ];

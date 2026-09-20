@@ -53,6 +53,7 @@ export function dismissOne(closeSheet: () => boolean): boolean {
     repaint();
     return true;
   }
+
   if (chrome.editing !== null) {
     chrome.editing = null;
     repaint();

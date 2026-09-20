@@ -18,7 +18,7 @@ use crate::equity::{self, ComboEquity, EquityReport, HotCard};
 use crate::error::ParseError;
 use crate::flops::{self, FlopBreakdown, FlopFilter};
 use crate::groups::{Colour, GroupSet, Mark, DEFAULT_COLOUR};
-use crate::library;
+use crate::library::{self, Actions};
 use crate::preflop::{self, PreflopBreakdown};
 use crate::range::{Preset, Range};
 use crate::ranking::Ranking;
@@ -719,19 +719,24 @@ impl Session {
     /// Returns `false` if there is no such chart, so an old saved link naming one
     /// that has since been renamed fails quietly rather than throwing.
     pub fn load_library(&mut self, id: &str) -> bool {
-        self.load_library_chart(id, false)
+        self.load_library_chart(id, Actions::ALL, false)
     }
 
     /// Loads a chart, optionally without the hands whose EV is zero.
-    pub fn load_library_chart(&mut self, id: &str, without_zero_ev: bool) -> bool {
+    pub fn load_library_chart(
+        &mut self,
+        id: &str,
+        actions: Actions,
+        without_zero_ev: bool,
+    ) -> bool {
         if !self.editable() {
             return false;
         }
         let built = |chart: &library::Chart| {
             if without_zero_ev {
-                chart.range_without_zero_ev().ok()
+                chart.range_of_without_zero_ev(actions).ok()
             } else {
-                chart.range().ok()
+                chart.range_of(actions).ok()
             }
         };
         match library::chart_by_id(id).and_then(built) {
@@ -765,6 +770,86 @@ impl Session {
             .from_library
             .as_ref()
             .is_some_and(|chart| chart.pristine != self.active().range)
+    }
+
+    /// Loads a chart with another one taken out of it.
+    ///
+    /// Weight by weight rather than hand by hand, so a chart that three-bets
+    /// ace-king a third of the time takes a third of it away.
+    ///
+    /// Nothing in the interface reaches this. It was how a cold call was got at
+    /// before the charts carried their actions apart; now the call is one of
+    /// them and is asked for directly. Kept because taking one named range off
+    /// another is a thing a reader may yet want to do.
+    ///
+    /// The seat is left holding `id` rather than an edit of it.
+    pub fn load_library_less(&mut self, id: &str, minus: &str, without_zero_ev: bool) -> bool {
+        if !self.editable() {
+            return false;
+        }
+        let built = |id: &str| {
+            library::chart_by_id(id).and_then(|chart| {
+                if without_zero_ev {
+                    chart.range_without_zero_ev().ok()
+                } else {
+                    chart.range().ok()
+                }
+            })
+        };
+        let (Some(whole), Some(taken)) = (built(id), built(minus)) else {
+            return false;
+        };
+        let left = whole.difference(&taken);
+        self.active_mut().from_library = Some(FromLibrary {
+            id: id.to_string(),
+            pristine: left.clone(),
+        });
+        self.active_mut().range = left;
+        self.park_slider();
+        self.apply_default_groups(Because::TheRangeChanged);
+        true
+    }
+
+    /// Takes a chart away from the active range.
+    ///
+    /// Nothing in the interface reaches this either: a chart carries its
+    /// actions apart, so the parts of one are asked for rather than worked out.
+    /// Kept for the same reason as [`Session::load_library_less`].
+    ///
+    /// Returns `false` if there is no such chart, like [`Session::load_library`].
+    pub fn subtract_library_chart(&mut self, id: &str, without_zero_ev: bool) -> bool {
+        if !self.editable() {
+            return false;
+        }
+        let Some(other) = library::chart_by_id(id).and_then(|chart| {
+            if without_zero_ev {
+                chart.range_without_zero_ev().ok()
+            } else {
+                chart.range().ok()
+            }
+        }) else {
+            return false;
+        };
+        self.subtract(&other);
+        true
+    }
+
+    /// Takes everything a quick button selects away from the active range.
+    ///
+    /// Nothing in the interface reaches this either; see
+    /// [`Session::subtract_library_chart`].
+    pub fn subtract_preset(&mut self, preset: Preset) {
+        if !self.editable() {
+            return;
+        }
+        self.subtract(&Range::preset(preset));
+    }
+
+    fn subtract(&mut self, other: &Range) {
+        let left = self.active().range.difference(other);
+        self.active_mut().range = left;
+        self.park_slider();
+        self.apply_default_groups(Because::TheRangeChanged);
     }
 
     /// Adds everything a quick button selects to the active range.
@@ -4140,6 +4225,53 @@ mod tests {
         session.toggle_dead(Card::parse("Kh").unwrap());
         assert_eq!(session.live_combos(), 1.0, "a dead king leaves one");
         assert_eq!(session.breakdown().total_combos, session.live_combos());
+    }
+
+    #[test]
+    fn one_range_taken_off_another_leaves_the_difference() {
+        // Nothing in the interface reaches this any more - a chart carries its
+        // actions apart, so a cold call is asked for rather than worked out -
+        // but the arithmetic is still here and still has to be right.
+        let mut session = Session::new();
+        assert!(session.load_library("mtt-100bb-defend-btn-vs-co"));
+        let whole = session.active().range.clone();
+        assert!(session.subtract_library_chart("mtt-100bb-open-utg", false));
+        let left = session.active().range.clone();
+
+        assert!(left.combo_count() > 0.0);
+        assert!(left.combo_count() < whole.combo_count());
+        assert_eq!(left, whole.intersection(&left), "nothing new arrived");
+        for combo in Combo::all() {
+            let opens = library::chart_by_id("mtt-100bb-open-utg")
+                .unwrap()
+                .range()
+                .unwrap();
+            let want = (whole.get(combo) - opens.get(combo)).max(0.0);
+            assert!((left.get(combo) - want).abs() < 1e-6, "{combo}");
+        }
+    }
+
+    #[test]
+    fn a_quick_button_comes_off_the_range_as_well_as_on_it() {
+        let mut session = Session::new();
+        session.set_active_range_text("22+, AQs+, AKo").unwrap();
+        let before = session.active().range.combo_count();
+        session.subtract_preset(Preset::Pairs);
+        assert_eq!(
+            session.active().range.get(Combo::parse("7h7s").unwrap()),
+            0.0
+        );
+        assert_eq!(
+            session.active().range.get(Combo::parse("AhKd").unwrap()),
+            1.0
+        );
+        assert!(session.active().range.combo_count() < before);
+
+        // Taking away what is not there changes nothing, rather than going
+        // negative or emptying the matrix.
+        let left = session.active().range.clone();
+        session.subtract_preset(Preset::Pairs);
+        assert_eq!(session.active().range, left);
     }
 
     #[test]
