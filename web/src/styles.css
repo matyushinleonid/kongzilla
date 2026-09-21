@@ -612,10 +612,14 @@ body {
 /* The way out of a range. Faint until the pointer is on the tile, because it
    is the one irreversible thing in this row and should not be the first thing
    the eye lands on - but always there to be found, which a modifier key is not. */
-.seat-drop {
+.seat-copy {
   position: absolute;
   top: 1px;
-  right: 1px;
+  left: 1px;
+}
+
+.seat-copy,
+.seat-drop {
   width: 14px;
   height: 14px;
   padding: 0;
@@ -629,6 +633,28 @@ body {
   cursor: pointer;
   opacity: 0;
   transition: opacity 90ms ease-out;
+}
+
+.seat:hover .seat-copy,
+.seat-copy:focus-visible {
+  opacity: 1;
+}
+
+/* The accent rather than the warning colour: this one makes a range, it does
+   not take one away. */
+.seat-copy:hover {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.seat-copy[hidden] {
+  display: none;
+}
+
+.seat-drop {
+  position: absolute;
+  top: 1px;
+  right: 1px;
 }
 
 .seat-drop[hidden] {
@@ -1391,6 +1417,45 @@ body {
   display: contents;
 }
 
+/*
+ * The bands of equity, under the ladder: the same range read by what its hands
+ * are worth rather than by what they made. Quieter than the ladder headings,
+ * because it is a second reading of the same thing rather than more of it.
+ */
+.block-bands .stat-row[data-band] .filter-mark {
+  opacity: 0.55;
+}
+
+.stat-row.empty-band {
+  opacity: 0.5;
+}
+
+/*
+ * Which part of a row a press paints. Two handles on one track, laid over each
+ * other the way the range slider's are.
+ */
+.band-row {
+  gap: 4px;
+}
+
+.band-track {
+  min-width: 40px;
+}
+
+.band-clear {
+  padding: 0 4px;
+  color: var(--warn);
+}
+
+.band-clear[hidden] {
+  display: none;
+}
+
+.band-row.narrowed .band-value {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ----- statistics panel --------------------------------------------------- */
 
 /*
@@ -1418,6 +1483,19 @@ body {
   border-radius: 3px;
   padding: 2px 6px 6px;
   min-height: 0;
+}
+
+/*
+ * The list scrolls only where it has been given a ceiling to scroll under.
+ *
+ * `overflow: auto` makes a box a scroll container whether or not anything
+ * overflows it, and `overscroll-behavior: contain` stops a scroll container
+ * passing the gesture on. Together, on a phone - where the panel is given no
+ * ceiling, so nothing overflows - they made a box that scrolled nothing and
+ * let nothing else scroll either: a finger anywhere on the statistics and the
+ * page would not move. So both wait for the ceiling that gives them a job.
+ */
+.workspace.capped .stats-body {
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1880,6 +1958,7 @@ body {
    reader is dragging it. Grid tracks are declared, not measured, so the slider
    keeps its length whatever the text beside it says. */
 .share-row {
+  position: relative;
   margin-top: 8px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) 118px 22px;
@@ -1891,28 +1970,63 @@ body {
   display: none;
 }
 
-.share-slider {
-  position: static;
-  flex: 1;
-  min-width: 80px;
-  pointer-events: auto;
-}
-
 /*
  * The track carries the staircase.
  *
  * Equity across a range holds a value over a run of hands and then drops, so
  * the places worth stopping are the edges of those runs - `--ticks` is a
- * hairline at each, drawn over the track's own colour. The slider snaps to
+ * hairline at each, drawn over the track's own colour. The handles snap to
  * them, and the marks are there so the snapping reads as the shape of the
  * range rather than as a sticky control.
  */
-.share-slider::-webkit-slider-runnable-track {
+.slice-track {
+  min-width: 80px;
+}
+
+.slice-track::before {
   background: var(--ticks, none), var(--track);
 }
 
-.share-slider::-moz-range-track {
-  background: var(--ticks, none), var(--track);
+/*
+ * The one in the row is an indicator: it says where the slice is, and it is
+ * forty pixels of track, which is not a thing anybody can aim a five per cent
+ * step at. Pointing at it opens the same control at a size that can be aimed
+ * at, which is where the dragging is meant to happen.
+ */
+.slice-popup {
+  position: absolute;
+  z-index: 6;
+  right: 0;
+  bottom: calc(100% + 6px);
+  width: 280px;
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 28%);
+}
+
+.slice-popup[hidden] {
+  display: none;
+}
+
+/* Wider is what a handle needs, and the popup gives it the width; the thumbs
+   grow with it so there is something to take hold of. */
+.slice-track.big .slider::-webkit-slider-thumb {
+  width: 15px;
+  height: 15px;
+  margin-top: 1.5px;
+}
+
+.slice-track.big .slider::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+}
+
+.slice-readout {
+  color: var(--ink-soft);
 }
 
 .cut-clear {
@@ -2587,6 +2701,43 @@ body.resizing {
 .pie .slice {
   stroke: var(--panel);
   stroke-width: 0.012;
+}
+
+/*
+ * The pie drawn hand by hand.
+ *
+ * The middle is equity and nothing else: green ahead, red behind, mixed in
+ * proportion - the same scale the equity views use, so a colour means the same
+ * thing wherever the reader meets it. Drawn finely enough that the joins
+ * cannot be seen, which is what makes a polar group read as a gradient turning
+ * over rather than as two blocks.
+ *
+ * No stroke between the shades: a hairline between every one of them would be
+ * a wedge made of lines.
+ */
+.pie-grainy .grain {
+  fill: color-mix(in srgb, var(--good) calc(var(--heat) * 100%), var(--bad));
+}
+
+/* Which group a wedge is, said at the rim and only there. */
+.pie-grainy .slice-rim {
+  fill: none;
+  stroke: var(--mark);
+  stroke-width: 0.16;
+}
+
+.pie-cursor {
+  stroke: var(--ink);
+  stroke-width: 0.016;
+  pointer-events: none;
+}
+
+.pie-grainy {
+  cursor: crosshair;
+}
+
+.pie-readout {
+  margin-top: -6px;
 }
 
 /* A slice and its key are one colour said twice, and the pie already knows

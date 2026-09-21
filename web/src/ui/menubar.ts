@@ -109,6 +109,40 @@ export function createMenuBar(): {
     picker.value = "";
   });
 
+  /*
+   * Full screen, which is the browser's own rather than a mode of ours.
+   *
+   * The app already comes down to whatever height it is given - the matrix has
+   * a ceiling the window sets - so this is not how it is made to fit. It is
+   * how a reader gets the browser's chrome and the operating system's bar back
+   * as working room, which on a laptop is a hundred and fifty pixels and a row
+   * of statistics.
+   */
+  const full = document.createElement("button");
+  full.type = "button";
+  full.className = "btn";
+  full.addEventListener("click", async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch {
+      // Refused, or not on offer. The caption is put right by the change
+      // event, which does not fire, so it is put right here instead.
+      renderFull();
+    }
+  });
+  const renderFull = () => {
+    // Truthiness rather than a comparison with null: a browser that does not
+    // do this at all leaves the property undefined, and `undefined !== null`
+    // had the button offering a way out of something nobody was in.
+    const on = Boolean(document.fullscreenElement);
+    full.textContent = on ? "Exit full screen" : "Full screen";
+    full.title = on ? "Give the browser its chrome back" : "Use the whole screen";
+    full.setAttribute("aria-pressed", String(on));
+  };
+  renderFull();
+  document.addEventListener("fullscreenchange", renderFull);
+
   const keys = document.createElement("button");
   keys.type = "button";
   keys.className = "btn";
@@ -163,6 +197,7 @@ export function createMenuBar(): {
     save,
     load,
     image,
+    full,
     keys,
     guide,
     source,

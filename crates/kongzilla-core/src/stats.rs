@@ -84,7 +84,7 @@ stat_ids! {
     OVERPAIR = 8,
     TOP_PAIR = 9,
     PP_BELOW_TOP_CARD = 10,
-    MIDDLE_PAIR = 11,
+    SECOND_PAIR = 11,
     PP_BELOW_SECOND_CARD = 12,
     BOTTOM_PAIR = 13,
     PP_BELOW_BOARD = 14,
@@ -106,6 +106,12 @@ stat_ids! {
     OESD_PLUS_PAIR = 30,
     GUTSHOT_PLUS_PAIR = 31,
     GUTSHOT_PLUS_OVERCARDS = 32,
+    // Appended rather than slotted in beside the other pairs, because a shared
+    // link writes a painted category as its index: put these where they are
+    // read and every link made before today would come back painted wrong.
+    // Where they are *shown* is `ORDER` below, which is a separate question.
+    THIRD_PAIR = 33,
+    FOURTH_PAIR = 34,
 }
 
 impl StatId {
@@ -130,8 +136,12 @@ impl StatId {
     }
 
     /// Every registered statistic, in display order.
+    ///
+    /// Which is not index order: an index is a place in a saved link and may
+    /// never move, while a place in the ladder is a matter of what reads well
+    /// and has already had to change once. See [`ORDER`].
     pub fn all() -> impl Iterator<Item = StatId> {
-        (0..DEFS.len() as u8).map(StatId)
+        ORDER.iter().copied()
     }
 }
 
@@ -233,9 +243,9 @@ pub static DEFS: &[StatDef] = &[
         false,
     ),
     def(
-        StatId::MIDDLE_PAIR,
-        "middle-pair",
-        "middle pair",
+        StatId::SECOND_PAIR,
+        "second-pair",
+        "second pair",
         StatBlock::Made,
         false,
     ),
@@ -386,12 +396,71 @@ pub static DEFS: &[StatDef] = &[
         StatBlock::Combination,
         false,
     ),
+    def(
+        StatId::THIRD_PAIR,
+        "third-pair",
+        "third pair",
+        StatBlock::Made,
+        false,
+    ),
+    def(
+        StatId::FOURTH_PAIR,
+        "fourth-pair",
+        "fourth pair",
+        StatBlock::Made,
+        false,
+    ),
 ];
 
 /// How many statistics the registry holds.
 pub fn stat_count() -> usize {
     DEFS.len()
 }
+
+/// The ladder, top to bottom.
+///
+/// Separate from the registry because the two answer different questions: an
+/// index is where a statistic lives in a saved link and may never move, and
+/// this is where it reads best. The pairs below the top card are named by
+/// which board card they hit - second, third, fourth - and the lowest is the
+/// bottom pair whatever its number, so no two rungs can ever mean one thing.
+pub const ORDER: [StatId; 35] = [
+    StatId::STRAIGHT_FLUSH,
+    StatId::QUADS,
+    StatId::FULL_HOUSE,
+    StatId::FLUSH,
+    StatId::STRAIGHT,
+    StatId::SET,
+    StatId::TRIPS,
+    StatId::TWO_PAIR,
+    StatId::OVERPAIR,
+    StatId::TOP_PAIR,
+    StatId::PP_BELOW_TOP_CARD,
+    StatId::SECOND_PAIR,
+    StatId::PP_BELOW_SECOND_CARD,
+    StatId::THIRD_PAIR,
+    StatId::FOURTH_PAIR,
+    StatId::BOTTOM_PAIR,
+    StatId::PP_BELOW_BOARD,
+    StatId::ACE_HIGH,
+    StatId::NO_MADE_HAND,
+    StatId::FLUSH_DRAW,
+    StatId::OESD_TWO_CARD,
+    StatId::OESD_ONE_CARD,
+    StatId::GUTSHOT_TWO_CARD,
+    StatId::GUTSHOT_ONE_CARD,
+    StatId::OVERCARDS,
+    StatId::BACKDOOR_FLUSH_DRAW_2,
+    StatId::BACKDOOR_FLUSH_DRAW_1_HIGH,
+    StatId::BACKDOOR_FLUSH_DRAW_1_LOW,
+    StatId::FLUSH_DRAW_PLUS_PAIR,
+    StatId::FLUSH_DRAW_PLUS_OESD,
+    StatId::FLUSH_DRAW_PLUS_GUTSHOT,
+    StatId::FLUSH_DRAW_PLUS_OVERCARDS,
+    StatId::OESD_PLUS_PAIR,
+    StatId::GUTSHOT_PLUS_PAIR,
+    StatId::GUTSHOT_PLUS_OVERCARDS,
+];
 
 /// Looks a statistic up by its stable key.
 pub fn stat_by_key(key: &str) -> Option<StatId> {
@@ -791,9 +860,18 @@ impl BoardContext {
         } else {
             b.rank()
         };
-        match self.ranks.iter().position(|r| *r == paired) {
+        // Which board card was hit, named by where it sits. The lowest one is
+        // the bottom pair whatever its number, so "third pair" and "bottom
+        // pair" can never be two names for the same thing - on a board of
+        // three ranks there is no third pair at all, only a bottom one.
+        let at = self.ranks.iter().position(|r| *r == paired);
+        let lowest = self.ranks.len().saturating_sub(1);
+        match at {
             Some(0) => StatId::TOP_PAIR,
-            Some(1) => StatId::MIDDLE_PAIR,
+            Some(place) if place == lowest => StatId::BOTTOM_PAIR,
+            Some(1) => StatId::SECOND_PAIR,
+            Some(2) => StatId::THIRD_PAIR,
+            Some(3) => StatId::FOURTH_PAIR,
             _ => StatId::BOTTOM_PAIR,
         }
     }
@@ -952,8 +1030,19 @@ mod tests {
             assert_eq!(stat_by_key(def.key), Some(def.id));
         }
         assert!(DEFS.len() <= 128, "StatMask holds 128 bits");
+
+        // The ladder holds every statistic once and nothing else. The registry
+        // may grow at the end - an index is a place in a saved link and may
+        // never move - so this is what keeps the two from drifting apart.
+        assert_eq!(ORDER.len(), DEFS.len());
+        let mut listed: Vec<u8> = ORDER.iter().map(|stat| stat.index()).collect();
+        listed.sort_unstable();
+        assert_eq!(listed, (0..DEFS.len() as u8).collect::<Vec<_>>());
+
+        // And the blocks are whole in the ladder rather than in the registry,
+        // because the ladder is what a reader sees.
         let mut seen: Vec<StatBlock> = Vec::new();
-        for def in DEFS {
+        for def in ORDER.iter().map(|stat| stat.def()) {
             if seen.last() != Some(&def.block) {
                 assert!(
                     !seen.contains(&def.block),
@@ -972,7 +1061,7 @@ mod tests {
             StatId::OVERPAIR,
             StatId::TOP_PAIR,
             StatId::PP_BELOW_TOP_CARD,
-            StatId::MIDDLE_PAIR,
+            StatId::SECOND_PAIR,
             StatId::PP_BELOW_SECOND_CARD,
             StatId::BOTTOM_PAIR,
             StatId::PP_BELOW_BOARD,
@@ -1026,10 +1115,135 @@ mod tests {
         assert_eq!(made_for("AcAd", "Kh 9s 4c"), "overpair");
         assert_eq!(made_for("AcKd", "Kh 9s 4c"), "top-pair");
         assert_eq!(made_for("TcTd", "Kh 9s 4c"), "pp-below-top-card");
-        assert_eq!(made_for("Ac9d", "Kh 9s 4c"), "middle-pair");
+        assert_eq!(made_for("Ac9d", "Kh 9s 4c"), "second-pair");
         assert_eq!(made_for("7c7d", "Kh 9s 4c"), "pp-below-2nd-card");
         assert_eq!(made_for("Ac4d", "Kh 9s 4c"), "bottom-pair");
         assert_eq!(made_for("3c3d", "Kh 9s 4c"), "pp-below-board");
+    }
+
+    #[test]
+    fn a_pair_is_named_for_the_card_it_hit() {
+        // Three ranks: top, second, bottom. There is no third pair to have,
+        // because the third card is the lowest one and the lowest one is the
+        // bottom pair.
+        for (hand, rung) in [
+            ("AcKd", "top-pair"),
+            ("Ac9d", "second-pair"),
+            ("Ac4d", "bottom-pair"),
+        ] {
+            assert_eq!(made_for(hand, "Kh 9s 4c"), rung, "{hand} on a flop");
+        }
+
+        // Four ranks: the third card is no longer the lowest, so it gets its
+        // own name and the bottom one keeps its.
+        for (hand, rung) in [
+            ("AcKd", "top-pair"),
+            ("Ac9d", "second-pair"),
+            ("Ac6h", "third-pair"),
+            ("Ac4d", "bottom-pair"),
+        ] {
+            assert_eq!(made_for(hand, "Kh 9s 6d 4c"), rung, "{hand} on a turn");
+        }
+
+        // Five ranks, and the same again with a fourth.
+        for (hand, rung) in [
+            ("AcKd", "top-pair"),
+            ("Ac9d", "second-pair"),
+            ("Ac6h", "third-pair"),
+            ("Ac4d", "fourth-pair"),
+            ("Ac2d", "bottom-pair"),
+        ] {
+            assert_eq!(made_for(hand, "Kh 9s 6d 4c 2h"), rung, "{hand} on a river");
+        }
+
+        // A paired board has fewer ranks than cards, and the names follow the
+        // ranks rather than the cards: K K 9 4 is three ranks, so the nine is
+        // the second pair and the four is the bottom one.
+        for (hand, rung) in [("Ac9h", "second-pair"), ("Ac4d", "bottom-pair")] {
+            assert_eq!(
+                made_for(hand, "Kh Ks 9d 4c"),
+                rung,
+                "{hand} on a paired turn"
+            );
+        }
+    }
+
+    #[test]
+    fn no_two_rungs_of_the_ladder_mean_one_thing() {
+        // The worry this answers: on a board of four ranks the fourth card is
+        // also the lowest, and a ladder that offered both "fourth pair" and
+        // "bottom pair" would be asking the reader which of two names for one
+        // hand to believe. Every board, every card on it, one name each.
+        let boards = [
+            "Kh 9s 4c",
+            "Kh 9s 6d 4c",
+            "Kh 9s 6d 4c 2h",
+            "Kh Ks 9d 4c",
+            "Kh Ks Qd Qc 4h",
+            "7h 7s 7c 4d 2h",
+        ];
+        let pairs = [
+            StatId::TOP_PAIR,
+            StatId::SECOND_PAIR,
+            StatId::THIRD_PAIR,
+            StatId::FOURTH_PAIR,
+            StatId::BOTTOM_PAIR,
+        ];
+        for text in boards {
+            let board = Board::parse(text).unwrap();
+            let mut named: Vec<(&str, Vec<u8>)> = Vec::new();
+            for rung in pairs {
+                // Which board ranks end up on this rung, whoever holds them.
+                let mut ranks: Vec<u8> = Vec::new();
+                for combo in Combo::all() {
+                    if combo.mask().intersects(board.mask()) {
+                        continue;
+                    }
+                    if !classify(combo, &board, ClassifyOptions::default()).has(rung) {
+                        continue;
+                    }
+                    let (a, b) = combo.cards();
+                    for card in [a, b] {
+                        if board.mask().iter().any(|on| on.rank() == card.rank())
+                            && !ranks.contains(&card.rank())
+                        {
+                            ranks.push(card.rank());
+                        }
+                    }
+                }
+                ranks.sort_unstable();
+                if !ranks.is_empty() {
+                    named.push((rung.def().key, ranks));
+                }
+            }
+            // No rank on two rungs, and no rung standing for two ranks.
+            for (one, (key, ranks)) in named.iter().enumerate() {
+                assert_eq!(ranks.len(), 1, "{text}: {key} covers {ranks:?}");
+                for (other_key, other) in named.iter().skip(one + 1) {
+                    assert_ne!(ranks, other, "{text}: {key} and {other_key} are one thing");
+                }
+            }
+            // And every rank a hand can pair is named by exactly one of them.
+            // A rank already paired on the board is not one of those: hitting
+            // it makes trips, which is a rung of its own further up.
+            let mut counts = [0u8; 13];
+            for card in board.mask().iter() {
+                counts[card.rank() as usize] += 1;
+            }
+            // Counted only where no rank is tripled: with three of a kind on
+            // the board, pairing one of the other cards is a full house rather
+            // than a pair, so there is no rung to land on and nothing to
+            // count. That says nothing either way about two rungs meaning one
+            // thing, which is checked above for every board.
+            if counts.iter().all(|seen| *seen < 3) {
+                let pairable = counts.iter().filter(|seen| **seen == 1).count();
+                assert_eq!(
+                    named.len(),
+                    pairable,
+                    "{text}: {named:?} against {counts:?}"
+                );
+            }
+        }
     }
 
     #[test]

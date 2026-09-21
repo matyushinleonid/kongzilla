@@ -517,10 +517,13 @@ mod tests {
     fn every_chart_is_addressable_and_parses() {
         // Five complete tournament depths, and three six-handed cash games with
         // no UTG1 or LJ to speak of - each with the five opens, the five
-        // defences and the limp to isolate. And, at a hundred blinds, what
-        // every other seat does facing an open: twenty-eight spots, less the
-        // seven the big blind already had a defence for.
-        assert_eq!(CHARTS.len(), 5 * 15 + 3 * 11 + 28 - 7);
+        // defences and the limp to isolate.
+        //
+        // And on top of those, what each other seat does facing an open: at
+        // every tournament depth, twenty-eight spots less the seven the big
+        // blind already had a defence for; and in every cash game, fifteen
+        // less the five it had.
+        assert_eq!(CHARTS.len(), 5 * 15 + 3 * 11 + 5 * (28 - 7) + 3 * (15 - 5));
         for chart in CHARTS {
             let range = chart
                 .range()
@@ -729,23 +732,95 @@ mod tests {
 
     #[test]
     fn every_seat_behind_an_opener_has_an_answer_to_it() {
-        // Twenty-eight of them: seven openers, each answered by everybody still
-        // to act. The big blind's are the defences it was always shown, since
-        // a defence is exactly that - what a seat does against an open.
-        let mut seen = 0;
-        for opener in Seat::OPENERS {
-            let behind: Vec<Seat> = Seat::ALL
-                .into_iter()
-                .filter(|seat| *seat > opener)
-                .collect();
-            assert!(!behind.is_empty());
-            for seat in behind {
-                let chart = chart_for_versus(Spot::Defend, seat, opener);
-                assert!(chart.percent() > 0.0);
-                seen += 1;
+        // Twenty-eight per depth: seven openers, each answered by everybody
+        // still to act. The big blind's are the defences it was always shown,
+        // since a defence is exactly that - what a seat does against an open.
+        for stack in Stack::ALL.into_iter().filter(|stack| stack.game() == "mtt") {
+            let mut seen = 0;
+            for opener in Seat::OPENERS {
+                let behind: Vec<Seat> = Seat::ALL
+                    .into_iter()
+                    .filter(|seat| *seat > opener)
+                    .collect();
+                assert!(!behind.is_empty());
+                for seat in behind {
+                    let chart = chart_at(stack, Spot::Defend, seat, opener);
+                    assert!(chart.percent() > 0.0, "{stack:?} {seat:?} vs {opener:?}");
+                    seen += 1;
+                }
+            }
+            assert_eq!(seen, 28, "{stack:?}");
+        }
+    }
+
+    #[test]
+    fn a_cash_game_answers_an_open_from_four_seats() {
+        // Six-handed, so the seats behind an opener are fewer - and the two
+        // an eight-handed table adds are not there to ask about.
+        for stack in Stack::ALL
+            .into_iter()
+            .filter(|stack| stack.game() == "cash")
+        {
+            let mut seen = 0;
+            for opener in [Seat::Utg, Seat::Hj, Seat::Co, Seat::Btn, Seat::Sb] {
+                for seat in [Seat::Hj, Seat::Co, Seat::Btn, Seat::Sb, Seat::Bb] {
+                    if seat <= opener {
+                        continue;
+                    }
+                    let chart = chart_at(stack, Spot::Defend, seat, opener);
+                    assert!(chart.percent() > 0.0, "{stack:?} {seat:?} vs {opener:?}");
+                    seen += 1;
+                }
+            }
+            assert_eq!(seen, 15, "{stack:?}");
+            for absent in [Seat::Utg1, Seat::Lj] {
+                assert!(
+                    !CHARTS.iter().any(|chart| chart.stack == stack
+                        && chart.spot == Spot::Defend
+                        && chart.seat == absent),
+                    "{stack:?} has no {absent:?} to answer with"
+                );
             }
         }
-        assert_eq!(seen, 28);
+    }
+
+    #[test]
+    fn cold_calling_thins_out_as_the_stacks_shorten() {
+        // A cold call is a hand taken to the flop to play, and there is less
+        // left to play it with every time the stacks come down - so a seat
+        // that flats to use its position flats less of what it continues with.
+        for (seat, opener) in [
+            (Seat::Utg1, Seat::Utg),
+            (Seat::Btn, Seat::Utg),
+            (Seat::Sb, Seat::Btn),
+        ] {
+            let calls =
+                |stack| chart_at(stack, Spot::Defend, seat, opener).percent_of(Action::Call.only());
+            assert!(
+                calls(Stack::Bb40) < calls(Stack::Bb100),
+                "{seat:?} vs {opener:?}: calls {:.1}% at forty, {:.1}% at a hundred",
+                calls(Stack::Bb40),
+                calls(Stack::Bb100)
+            );
+        }
+
+        // The big blind is the other way round. It is priced in whatever it
+        // holds, and with less room to play after the flop it takes the price
+        // more often rather than raising - the one seat where a shorter stack
+        // means more calling, not less.
+        let blind = |stack| {
+            chart_at(stack, Spot::Defend, Seat::Bb, Seat::Btn).percent_of(Action::Call.only())
+        };
+        assert!(
+            blind(Stack::Bb40) > blind(Stack::Bb100),
+            "BB vs BTN: calls {:.1}% at forty, {:.1}% at a hundred",
+            blind(Stack::Bb40),
+            blind(Stack::Bb100)
+        );
+
+        // Three-bets do not move one way with the stack, which is why nothing
+        // here claims they do: they widen down to sixty blinds and tighten
+        // again at forty, where going back in commits most of what is behind.
     }
 
     #[test]
@@ -825,17 +900,22 @@ mod tests {
         }
     }
 
-    /// One chart of a spot between two named seats.
+    /// One chart of a spot between two named seats, at a hundred blinds.
     fn chart_for_versus(spot: Spot, seat: Seat, versus: Seat) -> &'static Chart {
+        chart_at(Stack::Bb100, spot, seat, versus)
+    }
+
+    /// The same, at whichever depth.
+    fn chart_at(stack: Stack, spot: Spot, seat: Seat, versus: Seat) -> &'static Chart {
         CHARTS
             .iter()
             .find(|chart| {
-                chart.stack == Stack::Bb100
+                chart.stack == stack
                     && chart.spot == spot
                     && chart.seat == seat
                     && chart.versus == Some(versus)
             })
-            .unwrap_or_else(|| panic!("no {spot:?} for {seat:?} vs {versus:?}"))
+            .unwrap_or_else(|| panic!("no {spot:?} for {seat:?} vs {versus:?} at {stack:?}"))
     }
 
     #[test]

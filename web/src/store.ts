@@ -13,6 +13,7 @@ import type {
   CellCombo,
   ClassCombo,
   Cut,
+  EquityBucket,
   FlopBreakdown,
   HotCard,
   Library,
@@ -98,6 +99,17 @@ export interface Chrome {
   suitCell: number | null;
   /** The last preflop pass, which is computed on request rather than live. */
   preflop: PreflopBreakdown | null;
+  /**
+   * Which part of a row a press paints, by equity, strongest first.
+   *
+   * The whole of it is `0..100`. Anything narrower takes a slice: the best
+   * fifth of the trash is `0..20`, the worst quarter of top pair is `75..100`.
+   * A rung says what a hand made and two hands on one rung can be a long way
+   * apart, so this is how a reader reaches the part they meant.
+   */
+  rowBand: { low: number; high: number };
+  /** Which slice of the range the equity slider is painting, as shares. */
+  slice: { from: number; to: number };
   /** Whether a preflop pass is running. */
   preflopRunning: boolean;
   /** Colour scheme: `null` follows the system. */
@@ -135,6 +147,8 @@ export const chrome: Chrome = {
   cut: null,
   suitCell: null,
   preflop: null,
+  rowBand: { low: 0, high: 100 },
+  slice: { from: 0, to: 1 },
   preflopRunning: false,
   theme: null,
   // The matrix earns the most room; the statistics panel needs far less width
@@ -226,16 +240,25 @@ export function mutate(change: (engine: Engine) => void): void {
 
 /** Re-renders without touching the engine - for presentation-only changes. */
 export function repaint(): void {
-  if (chrome.hovered !== null) {
-    hoverPanel = JSON.parse(engine.breakdownWithin(chrome.hovered));
-  } else {
-    hoverPanel = null;
+  // Two passes over the range and two JSON documents, and a pointer moving
+  // across the matrix asks for a repaint on every cell it crosses. Neither of
+  // these depends on where the pointer is except through the statistic it is
+  // over, so they are worked out again only when that or the session moves -
+  // which is most pointer moves not paying for them at all.
+  const asked = `${chrome.hovered ?? "none"}/${changes}/${state().versusSeat ?? "all"}`;
+  if (asked !== panelsFor) {
+    panelsFor = asked;
+    hoverPanel =
+      chrome.hovered === null ? null : JSON.parse(engine.breakdownWithin(chrome.hovered));
+    // The second column is read under the same restriction as the first, so
+    // both are always answering the same question.
+    comparePanel = JSON.parse(engine.compareBreakdown(chrome.hovered ?? undefined));
   }
-  // The second column is read under the same restriction as the first, so both
-  // are always answering the same question.
-  comparePanel = JSON.parse(engine.compareBreakdown(chrome.hovered ?? undefined));
   listeners.forEach((listener) => listener());
 }
+
+/** What the two side panels were last worked out for. */
+let panelsFor = "";
 
 /** The seat the statistics panel is comparing against, as a second column. */
 export function compareBreakdown(): Breakdown | null {
@@ -319,6 +342,36 @@ export function comboColour(combo: number): string {
   return engine.comboColour(combo);
 }
 
+/**
+ * How strong every hand is on this board, by combo index.
+ *
+ * Empty before the flop, where there is no board to be strong on. Used to
+ * settle ties: two hands worth the same equity against one opponent are still
+ * not the same hand, and the better one belongs first.
+ */
+export function rankByCombo(): Uint32Array {
+  return engine.rankByCombo();
+}
+
+/**
+ * The palette slot of every hand, by combo index.
+ *
+ * The pie reads all of them at once. Asking one at a time crosses the wasm
+ * boundary a thousand times for one drawing.
+ */
+export function colourByCombo(): Uint8Array {
+  return engine.colourByCombo();
+}
+
+/**
+ * Which hands are behind each tier of the last pass over the flops.
+ *
+ * `combo * 4 + tier`, strongest tier first, and empty when no pass is standing.
+ */
+export function preflopTiers(): Float32Array {
+  return engine.preflopTiers();
+}
+
 /** The hands in one matrix cell, with their colours. */
 export function comboColours(cell: number): Array<[number, string, string]> {
   return JSON.parse(engine.comboColours(cell));
@@ -338,10 +391,10 @@ export function highlight(stat: number): Float32Array {
   return engine.highlight(stat);
 }
 
-/** Paints the strongest share of the range by equity, and remembers the slice. */
-export function setCut(share: number): void {
+/** Paints a slice of the range by equity, and remembers it. */
+export function setCut(from: number, to: number): void {
   mutate((engine) => {
-    chrome.cut = JSON.parse(engine.setContinueByEquity(share)) as Cut | null;
+    chrome.cut = JSON.parse(engine.setContinueBetween(from, to)) as Cut | null;
   });
 }
 
@@ -387,6 +440,42 @@ export function dealFlopFrom(axis: string, group: string): void {
 /** How often each kind of flop comes. */
 export function flopBreakdown(): FlopBreakdown {
   return JSON.parse(engine.flopBreakdown());
+}
+
+/**
+ * The range split by how much equity each hand has.
+ *
+ * Empty where there is nothing to measure against. Worked out from the same
+ * per-hand equity the matrix and the graph read, so asking for it costs
+ * nothing once one of those has.
+ */
+export function equityBuckets(): EquityBucket[] {
+  return JSON.parse(engine.equityBuckets());
+}
+
+/**
+ * Paints part of a category, taken by equity.
+ *
+ * The whole of it is painted as a category and keeps following the board;
+ * anything narrower is a fact about this board and is painted hand by hand.
+ */
+export function paintStatPart(stat: number, colour: string): boolean {
+  const { low, high } = chrome.rowBand;
+  let painted = false;
+  mutate((engine) => {
+    painted = engine.paintStatPart(stat, low, high, colour);
+  });
+  return painted;
+}
+
+/** The same, for one band of the equity range. */
+export function paintEquityBand(band: string, colour: string): boolean {
+  const { low, high } = chrome.rowBand;
+  let painted = false;
+  mutate((engine) => {
+    painted = engine.paintEquityBand(band, low, high, colour);
+  });
+  return painted;
 }
 
 /** How each remaining card changes the hand's equity. */

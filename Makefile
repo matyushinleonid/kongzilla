@@ -1,4 +1,4 @@
-.PHONY: help install run stop test check format build standalone wasm bench charts library ranking clean
+.PHONY: help install run stop test check format build standalone wasm bench browser bench-web dist charts library ranking clean
 
 RUST_IMAGE ?= rust:1.90-bookworm
 NODE_IMAGE ?= node:22-bookworm-slim
@@ -16,6 +16,8 @@ help:
 	@echo "make check     everything CI runs: format, lint, test, build"
 	@echo "make format    reformat Rust and web sources"
 	@echo "make wasm      build the engine into web/wasm for a local toolchain"
+	@echo "make browser   check fit, feel and touch in a real browser"
+	@echo "make bench-web what the engine costs in the browser"
 	@echo "make charts     re-read the solver screenshots into the preflop library"
 	@echo "make bench      time the preflop pass over all 22,100 flops"
 	@echo "make library    print the preflop library as a table of percentages"
@@ -57,6 +59,30 @@ charts:
 	python3 scripts/charts/parse_all.py
 	python3 scripts/charts/gen_charts.py
 	$(CARGO) fmt --all
+
+# Does the built page fit on a screen, in every setting, without scrolling?
+# A real browser, because jsdom has no layout and so cannot answer it. Not part
+# of `check`: it wants a browser image and half a minute, and what it guards
+# against is a slow drift rather than something a wrong line of code does
+# straight away.
+PUPPETEER = docker run --rm --user "$$(id -u):$$(id -g)" -v "$$(pwd)":/app -w /app \
+	--entrypoint node -e NODE_PATH=/home/pptruser/node_modules -e HOME=/tmp \
+	-e PUPPETEER_CACHE_DIR=/home/pptruser/.cache/puppeteer \
+	ghcr.io/puppeteer/puppeteer:23.11.1
+
+browser: dist
+	$(PUPPETEER) scripts/browser/fits.mjs
+	$(PUPPETEER) scripts/browser/feel.mjs
+	$(PUPPETEER) scripts/browser/touch.mjs
+
+# What the engine costs in the browser rather than in Rust. Prints rather than
+# passes or fails: it is a number to know, and a number that moves with the
+# machine it is measured on.
+bench-web: dist
+	$(PUPPETEER) scripts/browser/bench.mjs
+
+dist:
+	$(NPM) run build
 
 bench:
 	$(CARGO) run --quiet --release -p kongzilla-core --example bench_preflop

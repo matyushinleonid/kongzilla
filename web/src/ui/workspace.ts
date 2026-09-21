@@ -110,17 +110,88 @@ export function createWorkspace(columns: Column[]): { element: HTMLElement; rend
     workspace.append(column.element, gutter(column));
   }
 
-  const fitHeight = () => capPanels(workspace);
+  const fitHeight = () => {
+    ceiling = fitMatrix(workspace);
+    workspace.style.setProperty("--w-range", `${Math.min(chrome.columns.range, ceiling)}px`);
+    capPanels(workspace);
+  };
   window.addEventListener("resize", fitHeight);
+  // The first render measures a page the browser has not laid out yet, so what
+  // it works out is about the page as it was a moment ago - and on a laptop
+  // that is the difference between fitting and not. One more pass once there
+  // is something to measure settles it, and settles in one because the answer
+  // does not depend on whether it is already being worn.
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(fitHeight);
 
   const render = () => {
     for (const column of columns) {
-      workspace.style.setProperty(`--w-${column.key}`, `${chrome.columns[column.key]}px`);
+      const wanted = chrome.columns[column.key];
+      // The starting-hands column has a ceiling the window sets as well as the
+      // one the reader sets, and the smaller of the two wins. See `fitMatrix`.
+      const width = column.key === "range" ? Math.min(wanted, ceiling) : wanted;
+      workspace.style.setProperty(`--w-${column.key}`, `${width}px`);
     }
     fitHeight();
   };
 
   return { element: workspace, render };
+}
+
+/**
+ * The widest the starting-hands column may be before its matrix stops fitting.
+ *
+ * Kept between renders because it is worked out from a measurement, and the
+ * measurement is of a panel that is already wearing the last answer.
+ */
+let ceiling = Number.POSITIVE_INFINITY;
+
+/**
+ * Brings the matrix down to what the window has room for.
+ *
+ * The matrix is a square of thirteen cells: its height follows its width, so
+ * the column being wide is the same thing as the panel being tall. On a laptop
+ * that panel is what decides whether the page scrolls - nothing else in it is
+ * big enough to matter - and a page that scrolls pushes off whatever happens
+ * to be last rather than whatever matters least.
+ *
+ * So the column gets a second width, the one the height allows, and wears
+ * whichever of the two is smaller. The reader's own choice is not overwritten:
+ * widen the window and the matrix goes back to the size they asked for.
+ *
+ * Measured rather than worked out from the stylesheet. How much of the panel
+ * is not matrix depends on what is in the library and how the chips wrap, and
+ * a number copied from the stylesheet is a number that goes stale.
+ */
+function fitMatrix(workspace: HTMLElement): number {
+  const panel = workspace.querySelector<HTMLElement>(".panel-range");
+  const matrix = workspace.querySelector<HTMLElement>(".panel-range .matrix");
+  if (!panel || !matrix || window.innerWidth < STACKS_BELOW || window.innerHeight < FITS_ABOVE) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const grid = matrix.getBoundingClientRect();
+  const whole = panel.getBoundingClientRect();
+  if (grid.height <= 0 || grid.width <= 0) return Number.POSITIVE_INFINITY;
+
+  // Everything measured here is what the answer does *not* change, so that
+  // asking twice gives the same answer. Cap the column and the matrix shrinks
+  // both ways at once - but its shape stays, the rest of the panel keeps its
+  // height, and the weight column beside it keeps its width. Work from those
+  // and the ceiling comes out the same whether or not it is already on, which
+  // is what stops it chasing itself: shrink, fit, un-shrink, repeat.
+  const shape = grid.width / grid.height;
+  const rest = whole.height - grid.height;
+  const beside = whole.width - grid.width;
+  return Math.max(FLOORS.range, Math.floor((roomBelow(workspace) - rest) * shape + beside));
+}
+
+/** How much height the workspace has between where it starts and the bottom. */
+function roomBelow(workspace: HTMLElement): number {
+  const top = workspace.getBoundingClientRect().top + window.scrollY;
+  // The workspace's own bottom padding sits below the panels, so it comes out
+  // of the room they have. Read rather than repeated: a number copied from the
+  // stylesheet is a number that goes stale the first time the stylesheet moves.
+  const below = Number.parseFloat(getComputedStyle(workspace).paddingBottom) || 0;
+  return window.innerHeight - top - below;
 }
 
 /**
@@ -161,15 +232,10 @@ const UNCAPPED = ".panel-range, .panel-output";
 function capPanels(workspace: HTMLElement): void {
   const stacked = window.innerWidth < STACKS_BELOW;
   if (stacked || window.innerHeight < FITS_ABOVE) {
-    workspace.style.removeProperty("--panel-max");
+    uncap(workspace);
     return;
   }
-  const top = workspace.getBoundingClientRect().top + window.scrollY;
-  // The workspace's own bottom padding sits below the panels, so it comes out
-  // of the room they have. Read rather than repeated: a number copied from the
-  // stylesheet is a number that goes stale the first time the stylesheet moves.
-  const below = Number.parseFloat(getComputedStyle(workspace).paddingBottom) || 0;
-  const room = window.innerHeight - top - below;
+  const room = roomBelow(workspace);
   // These heights do not depend on the limit, so reading them here cannot set
   // the limit chasing itself.
   const fixed = Array.from(workspace.querySelectorAll(UNCAPPED)).reduce(
@@ -177,10 +243,24 @@ function capPanels(workspace: HTMLElement): void {
     0,
   );
   if (room < fixed) {
-    workspace.style.removeProperty("--panel-max");
+    uncap(workspace);
     return;
   }
   workspace.style.setProperty("--panel-max", `${Math.max(320, Math.floor(room))}px`);
+  workspace.classList.add("capped");
+}
+
+/**
+ * Takes the ceiling off, and says so.
+ *
+ * The class matters as much as the property: what scrolls inside a panel is
+ * only allowed to scroll while there is a ceiling to scroll under. A box that
+ * is a scroll container with nothing to scroll swallows the gesture that would
+ * have scrolled the page.
+ */
+function uncap(workspace: HTMLElement): void {
+  workspace.style.removeProperty("--panel-max");
+  workspace.classList.remove("capped");
 }
 
 function gutter(column: Column): HTMLElement {
