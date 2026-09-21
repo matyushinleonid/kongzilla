@@ -11,13 +11,13 @@
 
 use kongzilla_core::breakdown::{Breakdown, BreakdownMode};
 use kongzilla_core::cards::{Card, CardSet, Combo, HandClass, NUM_CLASSES};
-use kongzilla_core::engine::{Session, Snapshot};
+use kongzilla_core::engine::{EquityBand, Session, Snapshot};
 use kongzilla_core::equity::EquityReport;
 use kongzilla_core::groups::{colour_from_key, colour_key, PALETTE};
 use kongzilla_core::library::{charts, Actions, Seat, Stack};
 use kongzilla_core::range::Preset;
 use kongzilla_core::ranking::Ranking;
-use kongzilla_core::stats::{ClassifyOptions, StatBlock, StatId, DEFS};
+use kongzilla_core::stats::{ClassifyOptions, StatBlock, StatId};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -58,6 +58,17 @@ struct ChartView {
     /// Whether any of what this chart plays is played at no gain, so the
     /// panel knows whether excluding those hands would do anything at all.
     has_zero_ev: bool,
+}
+
+/// Something worked out per statistic, in index order.
+///
+/// The panel reads these by index, so they have to be written by index -
+/// `StatId::all()` walks the ladder, which is a different order.
+fn by_index<T>(of: impl Fn(StatId) -> T) -> Vec<T> {
+    (0..kongzilla_core::stats::stat_count() as u8)
+        .filter_map(StatId::from_index)
+        .map(of)
+        .collect()
 }
 
 /// One seat's tab.
@@ -105,6 +116,8 @@ struct CutView {
     share: f64,
     covered: f64,
     threshold: f64,
+    from: f64,
+    hand: Option<String>,
     board: String,
     combos: f64,
 }
@@ -203,8 +216,12 @@ impl Engine {
     /// The statistic registry, as JSON. Fetched once at start-up.
     #[wasm_bindgen(js_name = statDefinitions)]
     pub fn stat_definitions() -> String {
-        let defs: Vec<StatDefView> = DEFS
-            .iter()
+        // In the order the ladder shows them, which is not the order they are
+        // registered in: an index is a place in a saved link and may never
+        // move, so a rung added between two others is appended and put in its
+        // place here. The panel builds its rows straight from this list.
+        let defs: Vec<StatDefView> = StatId::all()
+            .map(StatId::def)
             .map(|d| StatDefView {
                 index: d.id.index(),
                 key: d.key,
@@ -314,6 +331,13 @@ impl Engine {
     #[wasm_bindgen(js_name = addSeat)]
     pub fn add_seat(&mut self) -> bool {
         self.session.add_seat().is_some()
+    }
+
+    /// Adds a seat holding a copy of one that is there, and says whether it
+    /// went. A dealt hand cannot be copied.
+    #[wasm_bindgen(js_name = duplicateSeat)]
+    pub fn duplicate_seat(&mut self, index: usize) -> bool {
+        self.session.duplicate_seat(index).is_some()
     }
 
     /// Removes a seat, and says whether it went. Two always stay.
@@ -511,6 +535,32 @@ impl Engine {
     }
 
     /// Paints one hand.
+    /// Paints part of a category, taken by equity, strongest first.
+    ///
+    /// `from` and `to` are percentages of the category: the whole of it is
+    /// `0..100`, which paints it as a category and keeps it following the
+    /// board. Anything narrower is painted hand by hand and stays put.
+    #[wasm_bindgen(js_name = paintStatPart)]
+    pub fn paint_stat_part(&mut self, stat: u8, from: f64, to: f64, colour: &str) -> bool {
+        let (Some(stat), Some(colour)) = (StatId::from_index(stat), colour_from_key(colour)) else {
+            return false;
+        };
+        self.session.paint_stat_part(stat, from, to, colour)
+    }
+
+    /// Paints part of one band of the equity range, taken by equity.
+    #[wasm_bindgen(js_name = paintEquityBand)]
+    pub fn paint_equity_band(&mut self, band: &str, from: f64, to: f64, colour: &str) -> bool {
+        let Some(colour) = colour_from_key(colour) else {
+            return false;
+        };
+        let Some(band) = EquityBand::ALL.into_iter().find(|it| it.key() == band) else {
+            return false;
+        };
+        self.session.paint_equity_band(band, from, to, colour)
+    }
+
+    /// Paints one hand.
     #[wasm_bindgen(js_name = paintCombo)]
     pub fn paint_combo(&mut self, combo: u16, colour: &str) {
         if let Some(colour) = colour_from_key(colour) {
@@ -522,6 +572,30 @@ impl Engine {
     #[wasm_bindgen(js_name = comboColour)]
     pub fn combo_colour(&self, combo: u16) -> String {
         colour_key(self.session.combo_colour(Combo::from_index(combo))).to_owned()
+    }
+
+    /// How strong every hand is on this board, by combo index.
+    ///
+    /// Empty before the flop. Nought where the board holds one of the hand's
+    /// own cards, which is a hand that cannot be held.
+    #[wasm_bindgen(js_name = rankByCombo)]
+    pub fn rank_by_combo(&self) -> Vec<u32> {
+        self.session.rank_by_combo()
+    }
+
+    /// The palette slot of every hand, by combo index. Nought is unpainted.
+    #[wasm_bindgen(js_name = colourByCombo)]
+    pub fn colour_by_combo(&self) -> Vec<u8> {
+        self.session.colour_by_combo()
+    }
+
+    /// Which hands are behind each tier of the last pass over the flops.
+    ///
+    /// Laid out as `combo * 4 + tier`, strongest tier first. Empty when no pass
+    /// is standing.
+    #[wasm_bindgen(js_name = preflopTiers)]
+    pub fn preflop_tiers(&self) -> Vec<f32> {
+        self.session.preflop_tiers()
     }
 
     /// Chooses the seat the per-hand equity views measure against. Out of range
@@ -599,15 +673,21 @@ impl Engine {
     ///
     /// Returns the cut as JSON, or `null` preflop, where per-combo equity is
     /// sampled and far too noisy to cut on.
-    #[wasm_bindgen(js_name = setContinueByEquity)]
-    pub fn set_continue_by_equity(&mut self, share: f64) -> String {
+    /// Paints a slice of the range, taken by equity, strongest first.
+    ///
+    /// Shares of the range: the top fifth is `0..0.2`, the bottom quarter is
+    /// `0.75..1`. The whole of it is no slice and puts back what was painted.
+    #[wasm_bindgen(js_name = setContinueBetween)]
+    pub fn set_continue_between(&mut self, from: f64, to: f64) -> String {
         let cut = self
             .session
-            .set_continue_by_equity(share)
+            .set_continue_between(from, to)
             .map(|cut| CutView {
                 share: cut.share,
                 covered: cut.covered,
                 threshold: f64::from(cut.threshold),
+                from: cut.from,
+                hand: cut.hand.clone(),
                 board: cut.board.clone(),
                 combos: cut.range.combo_count(),
             });
@@ -810,6 +890,15 @@ impl Engine {
         self.session.preflop_cached().map(|pass| to_json(&pass))
     }
 
+    /// The range split by how much equity each hand has, as JSON.
+    ///
+    /// Empty where there is nothing to measure against, which is how the panel
+    /// knows to leave the block out.
+    #[wasm_bindgen(js_name = equityBuckets)]
+    pub fn equity_buckets(&self) -> String {
+        to_json(&self.session.equity_buckets())
+    }
+
     /// Where the range slider's handles have somewhere to stop.
     ///
     /// The edges of the matrix cells, in the order the slider walks them, as
@@ -959,7 +1048,11 @@ impl Engine {
             class_weights: session.active().range.class_weights().to_vec(),
             class_combos: session.active().range.class_combo_counts().to_vec(),
             breakdown: session.breakdown(),
-            marks: StatId::all().map(|s| session.mark(s).key()).collect(),
+            // Indexed by the statistic's index rather than listed in the order
+            // the ladder shows them: the panel looks a row up by its index, and
+            // the two stopped being the same thing when the ladder gained
+            // rungs that had to be appended to the registry.
+            marks: by_index(|stat| session.mark(stat).key()),
             class_colours: session.class_colours().iter().map(|c| c.to_vec()).collect(),
             group_shares: session.group_shares().to_vec(),
             colours_used: session.colours_used(),
@@ -970,7 +1063,7 @@ impl Engine {
                 .iter()
                 .map(|suits| String::from_utf8_lossy(suits).into_owned())
                 .collect(),
-            checkmarks: StatId::all().map(|s| session.checkmarks().has(s)).collect(),
+            checkmarks: by_index(|stat| session.checkmarks().has(stat)),
             flop_groups: session
                 .flop_filter()
                 .selected()

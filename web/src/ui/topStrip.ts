@@ -107,7 +107,19 @@ export function createTopStrip(): { element: HTMLElement; render: () => void } {
           event.stopPropagation();
           mutate((engine) => engine.removeSeat(index));
         });
-        card.append(drop);
+        // A copy of the range beside the one that drops it: the two are the
+        // pair of things you do to a seat, and a reader trying a change wants
+        // somewhere to try it that is not the range they already had.
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "seat-copy";
+        copy.textContent = "⧉";
+        copy.setAttribute("aria-label", "Copy this range into a new one");
+        copy.addEventListener("click", (event) => {
+          event.stopPropagation();
+          mutate((engine) => engine.duplicateSeat(index));
+        });
+        card.append(copy, drop);
         seats.append(card);
         seatCards.push(card);
         thumbs.push(thumb);
@@ -132,6 +144,11 @@ export function createTopStrip(): { element: HTMLElement; render: () => void } {
       card.classList.toggle("is-hand", player.hand !== null);
       const drop = card.querySelector<HTMLButtonElement>(".seat-drop");
       if (drop) drop.hidden = view.players.length <= 2;
+      // No copy of a dealt hand - its cards are out of the deck, and a second
+      // seat holding them would be the same two cards dealt twice - and none
+      // when the table is full.
+      const copy = card.querySelector<HTMLButtonElement>(".seat-copy");
+      if (copy) copy.hidden = player.hand !== null || view.players.length >= 6;
       card.title = `${seatName(player)}: ${player.combos.toFixed(0)} combos, ${player.percent.toFixed(1)}%`;
       thumbs[index].paint(player.classWeights);
       const badge = card.querySelector(".seat-badge")!;

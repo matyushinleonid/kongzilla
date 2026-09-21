@@ -91,6 +91,7 @@ async function open(): Promise<App> {
     dealtBucket: null,
     preflop: null,
     preflopRunning: false,
+    rowBand: { low: 0, high: 100 },
     libraryOpener: "",
     actions: {},
     boardCards: [],
@@ -1350,6 +1351,121 @@ describe("the output views", () => {
   });
 });
 
+describe("the range read by what its hands are worth", () => {
+  const band = (app: App, key: string) =>
+    app.stats.querySelector<HTMLElement>(`.stat-row[data-band="${key}"]`)!;
+  const bandRow = (app: App) => app.stats.querySelector<HTMLElement>(".band-row")!;
+  const handles = (app: App) =>
+    Array.from(app.stats.querySelectorAll<HTMLInputElement>(".band-slider"));
+  const painted = () =>
+    state()
+      .groupShares.slice(1)
+      .reduce((sum, share) => sum + share, 0);
+
+  const table = async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7d");
+    card(app.board, "2c");
+    type(app, "22+, A2s+, K9s+, A8o+, KJo+");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "22+, A2s+, K2s+, Q8s+, J9s+, A2o+, K9o+");
+    seats2(app)[0].click();
+    app.render();
+    headButton(app.stats, "Clear").click();
+    app.render();
+    return app;
+  };
+
+  test("four bands, adding up to the whole range", async () => {
+    const app = await table();
+    const shares = ["best", "good", "weak", "trash"].map((key) =>
+      Number(band(app, key).querySelector(".stat-value")!.textContent!.replace("%", "")),
+    );
+    expect(shares.every((share) => share >= 0)).toBe(true);
+    expect(shares.reduce((sum, share) => sum + share, 0)).toBeCloseTo(100, 0);
+    expect(shares.some((share) => share > 0)).toBe(true);
+
+    // The block says what it is, and goes away when there is nobody to measure
+    // against - four rows reading nought is worse than no block.
+    expect(app.stats.querySelector<HTMLElement>(".block-bands")!.hidden).toBe(false);
+    seats2(app)[1].click();
+    app.render();
+    type(app, "");
+    seats2(app)[0].click();
+    app.render();
+    expect(app.stats.querySelector<HTMLElement>(".block-bands")!.hidden).toBe(true);
+  });
+
+  test("a band paints, and the slider takes a slice of it", async () => {
+    const app = await table();
+    swatch(app, "blue").click();
+    app.render();
+
+    // The whole of it first.
+    band(app, "trash").click();
+    app.render();
+    const all = painted();
+    expect(all).toBeGreaterThan(0);
+
+    // Now the best fifth of the same band: fewer hands, and the ones worth
+    // most - which is what goes in a betting range.
+    headButton(app.stats, "Clear").click();
+    app.render();
+    expect(bandRow(app).querySelector(".band-value")!.textContent).toBe("all of it");
+    const [from, to] = handles(app);
+    to.value = "20";
+    to.dispatchEvent(new window.Event("input", { bubbles: true }));
+    app.render();
+    expect(bandRow(app).querySelector(".band-value")!.textContent).toBe("top 20%");
+    expect(Number(from.value)).toBe(0);
+
+    band(app, "trash").click();
+    app.render();
+    const slice = painted();
+    expect(slice).toBeGreaterThan(0);
+    expect(slice).toBeLessThan(all);
+
+    // And the other end of it, for the worst of the good.
+    // The far handle first: neither may overtake the other, so moving the near
+    // one to eighty while the far one is still at twenty stops it at twenty.
+    headButton(app.stats, "Clear").click();
+    to.value = "100";
+    to.dispatchEvent(new window.Event("input", { bubbles: true }));
+    from.value = "80";
+    from.dispatchEvent(new window.Event("input", { bubbles: true }));
+    app.render();
+    expect(bandRow(app).querySelector(".band-value")!.textContent).toBe("bottom 20%");
+  });
+
+  test("the slice applies to a ladder rung as much as to a band", async () => {
+    const app = await table();
+    swatch(app, "blue").click();
+    app.render();
+    row(app, "top pair").click();
+    app.render();
+    const all = painted();
+    expect(all).toBeGreaterThan(0);
+    // The whole of a rung is still painted as a rung, so it keeps its marker
+    // rather than turning into a gear.
+    expect(reading(app, "top pair").mark).toBe("blue");
+
+    headButton(app.stats, "Clear").click();
+    const [, to] = handles(app);
+    to.value = "25";
+    to.dispatchEvent(new window.Event("input", { bubbles: true }));
+    app.render();
+    row(app, "top pair").click();
+    app.render();
+    expect(painted()).toBeLessThan(all);
+    expect(painted()).toBeGreaterThan(0);
+    // Part of a rung is hands rather than a category, so the rung says its own
+    // hands disagree - which they do.
+    expect(reading(app, "top pair").mark).toBe("mixed");
+  });
+});
+
 describe("equity before the flop", () => {
   test("the pass over the flops fills in the equity views too", async () => {
     const app = await open();
@@ -1413,8 +1529,11 @@ describe("equity before the flop", () => {
 });
 
 describe("what a seat does facing an open", () => {
-  const row = (app: App) => app.range.querySelector<HTMLElement>(".action-facing")!;
-  const opener = (app: App) => app.range.querySelector<HTMLSelectElement>(".opener-pick")!;
+  // Each game has a row of its own, and only one game is open at a time - so
+  // these have to say which, or they answer about the block nobody is in.
+  const row = (app: App) => app.range.querySelector<HTMLElement>(".library.open .action-facing")!;
+  const opener = (app: App) =>
+    app.range.querySelector<HTMLSelectElement>(".library.open .opener-pick")!;
   const chips = (app: App) =>
     Array.from(row(app).querySelectorAll<HTMLButtonElement>(".seat-chip"));
   /** One chip in the row of answers, by the seat on it. */
@@ -1612,6 +1731,35 @@ describe("what a seat does facing an open", () => {
     expect(include(app, "call")).not.toBeNull();
     type(app, "22+");
     expect(app.range.querySelector<HTMLElement>(".library-trim")!.hidden).toBe(true);
+  });
+
+  test("every depth that has been solved for it shows the row", async () => {
+    const app = await open();
+    const seats = () => chips(app).map((element) => element.textContent);
+
+    // Every tournament depth is solved for what each seat does facing an open.
+    for (const depth of ["100bb", "80bb", "60bb", "40bb", "20bb"]) {
+      stack(app, "mtt", depth).click();
+      app.render();
+      expect(row(app).hidden, `${depth} should have the row`).toBe(false);
+      facing(app, "co");
+      expect(seats(), `${depth} answers a CO open`).toEqual(["BTN", "SB", "BB"]);
+      answer(app, "BTN").click();
+      app.render();
+      expect(state().players[state().active].chart).toBe(`mtt-${depth}-defend-btn-vs-co`);
+      expect(percent()).toBeGreaterThan(0);
+    }
+
+    // The cash games are six-handed, so the same row is shorter: no UTG1 and
+    // no LJ to answer with.
+    stack(app, "cash", "NL25").click();
+    app.render();
+    expect(row(app).hidden).toBe(false);
+    facing(app, "utg");
+    expect(seats()).toEqual(["HJ", "CO", "BTN", "SB", "BB"]);
+    answer(app, "BTN").click();
+    app.render();
+    expect(state().players[state().active].chart).toBe("cash-nl25-defend-btn-vs-utg");
   });
 
   test("the row says what it is facing", async () => {
@@ -2524,10 +2672,11 @@ describe("choosing who to measure against", () => {
     seats2(app)[0].click();
     app.render();
 
-    // Three views are measured against another range - the two equity ones and
-    // the hotness, which asks how the cards to come treat one hand against it.
-    // The pie is about colours and the overlap about statistics, and a control
-    // that changed nothing would teach the reader that it does nothing.
+    // Four views are measured against another range - the two equity ones, the
+    // hotness, which asks how the cards to come treat one hand against it, and
+    // the pie, whose wedges are drawn strongest hand first. The overlap is
+    // about statistics alone, and a control that changed nothing there would
+    // teach the reader that it does nothing.
     const showing = (key: string) => {
       tab(app, key).click();
       app.render();
@@ -2536,7 +2685,7 @@ describe("choosing who to measure against", () => {
     expect(showing("eq-matrix")).toBe(true);
     expect(showing("eq-graph")).toBe(true);
     expect(showing("hotness")).toBe(true);
-    expect(showing("groups")).toBe(false);
+    expect(showing("groups")).toBe(true);
     expect(showing("overlap")).toBe(false);
 
     // Preflop the two equity views still measure - a pass over the flops works
@@ -2547,6 +2696,7 @@ describe("choosing who to measure against", () => {
     expect(state().board).toBe("");
     expect(showing("eq-graph")).toBe(true);
     expect(showing("eq-matrix")).toBe(true);
+    expect(showing("groups")).toBe(true);
     expect(showing("hotness")).toBe(false);
   });
 
@@ -2938,7 +3088,7 @@ describe("the numbers on screen agree with each other", () => {
     audit(app);
 
     // The slider, which cuts across the categories.
-    const slider = app.stats.querySelector<HTMLInputElement>(".share-slider")!;
+    const slider = app.stats.querySelector<HTMLInputElement>(".share-slider.slice-to")!;
     slider.value = "35";
     slider.dispatchEvent(new window.Event("input", { bubbles: true }));
     app.render();
@@ -3020,7 +3170,7 @@ describe("the core loop", () => {
 
     // The default grouping is on, and the filters are not.
     expect(reading(app, "top pair").mark).toBe("blue");
-    expect(reading(app, "middle pair").mark).toBe("none");
+    expect(reading(app, "second pair").mark).toBe("none");
     expect(state().filtersEnabled).toBe(false);
     expect(app.stats.querySelector(".effective")!.textContent).toMatch(/The filters are OFF/);
     expect(app.range.querySelectorAll(".cell.filtered")).toHaveLength(0);
@@ -3295,7 +3445,7 @@ describe("the equity slider", () => {
     app.render();
     expect(reading(app, "overpair").mark).toBe("blue");
 
-    const slider = app.stats.querySelector<HTMLInputElement>(".share-slider")!;
+    const slider = app.stats.querySelector<HTMLInputElement>(".share-slider.slice-to")!;
     slider.value = "40";
     slider.dispatchEvent(new window.Event("input", { bubbles: true }));
     app.render();
@@ -3304,7 +3454,7 @@ describe("the equity slider", () => {
     expect(chrome.cut).not.toBeNull();
     expect(state().filtersEnabled).toBe(false);
     expect(state().passFraction).toBeCloseTo(1, 9);
-    expect(app.stats.querySelector(".share-value")!.textContent).toMatch(/%\s·\s\d+%\+ eq/);
+    expect(app.stats.querySelector(".share-value")!.textContent).toMatch(/top \d+%\s·\s\d+%\+ eq/);
     // Cutting across the categories is what a gear is for.
     expect(statDefs.some((definition) => reading(app, definition.label).mark === "mixed")).toBe(
       true,
@@ -3625,7 +3775,10 @@ describe("pointing at a hand", () => {
       popup.querySelector<HTMLElement>(`.suit-cell[data-name="${name}"]`)!;
     expect(suit("AhKh").style.getPropertyValue("--groups")).toMatch(/linear-gradient/);
     expect(suit("AhKh").dataset.colour).toBe(
-      state().marks[statDefs.findIndex((d) => d.key === "flushdraw")],
+      // By its own index rather than by where it sits in the list: the two
+      // stopped being the same number when the ladder stopped being numbered
+      // in the order it is shown in.
+      state().marks[statDefs.find((d) => d.key === "flushdraw")!.index],
     );
     expect(suit("AsKs").style.getPropertyValue("--groups")).toBe("");
     expect(suit("AsKs").dataset.colour).toBe("blue");
@@ -3706,7 +3859,7 @@ describe("the equity slider", () => {
     seats2(app)[0].click();
     app.render();
 
-    const slider = app.stats.querySelector<HTMLInputElement>(".share-slider")!;
+    const slider = app.stats.querySelector<HTMLInputElement>(".share-slider.slice-to")!;
     const drag = (to: number) => {
       slider.value = String(to);
       slider.dispatchEvent(new window.Event("input", { bubbles: true }));
@@ -3716,7 +3869,9 @@ describe("the equity slider", () => {
 
     // The track carries a mark at each stop, so the snapping reads as the shape
     // of the range rather than as a sticky control.
-    expect(slider.style.getPropertyValue("--ticks")).toMatch(/linear-gradient/);
+    expect(
+      app.stats.querySelector<HTMLElement>(".slice-track")!.style.getPropertyValue("--ticks"),
+    ).toMatch(/linear-gradient/);
     expect(slider.step).toBe("any");
 
     // Dropped anywhere, it lands on a stop - and the stop is what gets painted,
@@ -3746,6 +3901,395 @@ describe("the equity slider", () => {
     expect(below).toBeLessThan(landed);
     expect(painted()).toBeLessThan(atStop);
     expect(state().players[state().active].notation, "painting is not narrowing").toBe(typed);
+  }, 30000);
+});
+
+describe("a ladder with only the rungs the range can reach", () => {
+  /** The statistics on screen, by the name on each. */
+  const listed = (app: App) =>
+    Array.from(app.stats.querySelectorAll<HTMLElement>(".stat-row"))
+      .filter((element) => !element.hidden)
+      .map((element) => element.querySelector(".stat-label")?.textContent ?? "");
+
+  test("a rung nothing in the range can make is not on screen", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, "AKo");
+    app.render();
+
+    // One offsuit hand: top pair and nothing else. A ladder that still listed
+    // quads, sets and flush draws would be a page of noughts.
+    const only = listed(app);
+    expect(only).toContain("top pair");
+    for (const gone of ["quads", "set", "flush", "flushdraw", "full house"]) {
+      expect(only, `${gone} is out of reach here`).not.toContain(gone);
+    }
+
+    // A range that can make them puts them back.
+    type(app, "22+, AKs, 65s");
+    app.render();
+    const more = listed(app);
+    expect(more).toContain("set");
+    expect(more).toContain("flushdraw");
+    expect(more.length).toBeGreaterThan(only.length);
+
+    // With no flop there is no board for anything to be out of reach on, and
+    // the ladder is what the reader ticks their hits on: all of it shows.
+    for (const dealt of ["Kh", "7h", "2c"]) card(app.board, dealt);
+    app.render();
+    expect(state().board).toBe("");
+    const every = listed(app);
+    expect(every).toContain("quads");
+    expect(every).toContain("flushdraw");
+    expect(every.length).toBeGreaterThan(more.length);
+    app.teardown();
+  }, 30000);
+});
+
+describe("hands worth the same are not the same hand", () => {
+  test("the better five cards come first", async () => {
+    const app = await open();
+    // Three diamonds and a ten: a flush beats the set of tens, and loses only
+    // when the river pairs the board.
+    for (const dealt of ["8d", "Kd", "Ad", "Ts"]) card(app.board, dealt);
+    type(app, "Qd7d, Jd6d");
+    app.strip.querySelector<HTMLButtonElement>(".deal-hand")!.click();
+    app.render();
+    card(app.strip, "Tc");
+    card(app.strip, "Th");
+    app.render();
+    tab(app, "eq-graph").click();
+    app.render();
+
+    const rows = Array.from(
+      app.output.querySelectorAll<HTMLElement>(".eq-table .eq-row[data-combo]"),
+    );
+    const named = rows.map((row) => row.querySelector(".eq-hand")!.textContent);
+    const worth = rows.map((row) => row.querySelectorAll(".num")[1].textContent);
+    expect(named).toHaveLength(2);
+
+    // Against one hand every flush wins exactly as often, so equity has
+    // nothing left to say - and the queen-high flush is still the better hand.
+    expect(worth[0]).toBe(worth[1]);
+    expect(named[0]).toBe("Q\u26667\u2666");
+    expect(named[1]).toBe("J\u26666\u2666");
+    app.teardown();
+  }, 30000);
+});
+
+describe("the pie read hand by hand", () => {
+  /** Points at a share of the way round the circle, from twelve o'clock. */
+  const pointAt = (app: App, share: number) => {
+    const svg = app.output.querySelector<SVGSVGElement>(".pie")!;
+    // jsdom has no layout, so the circle is measured for the test. The view
+    // box runs -1.05..1.05, which makes 210 pixels one unit each side.
+    svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 210, height: 210 }) as DOMRect;
+    const angle = share * Math.PI * 2 - Math.PI / 2;
+    // Half way out from the middle, which is inside every wedge.
+    const x = (Math.cos(angle) * 0.5 + 1.05) * 100;
+    const y = (Math.sin(angle) * 0.5 + 1.05) * 100;
+    svg.dispatchEvent(
+      new window.MouseEvent("pointermove", { bubbles: true, clientX: x, clientY: y }),
+    );
+    app.render();
+  };
+
+  const grains = (app: App) => Array.from(app.output.querySelectorAll<SVGElement>(".pie .grain"));
+
+  test("wedges drawn strongest hand first, and the hand under the pointer", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, "AA, KK, 72o, 33");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "QQ, JJ");
+    seats2(app)[0].click();
+    app.render();
+
+    headButton(app.stats, "Clear").click();
+    app.render();
+    tab(app, "groups").click();
+    app.render();
+
+    // The pie is drawn out of the hands it is made of rather than as flat
+    // wedges, and each is shaded by what the hand is worth.
+    const drawn = grains(app);
+    expect(drawn.length).toBeGreaterThan(1);
+    const heats = new Set(drawn.map((grain) => grain.style.getPropertyValue("--heat")));
+    expect(heats.size, "the colour says what each hand is worth").toBeGreaterThan(1);
+
+    // Nothing is painted yet, so the whole circle is one wedge - and walking
+    // it round from twelve o'clock is walking down the equities.
+    const walk: number[] = [];
+    for (let at = 0.01; at < 1; at += 0.02) {
+      pointAt(app, at);
+      const said = app.output.querySelector(".pie-readout")!.textContent ?? "";
+      const equity = Number(/(\d+\.\d+)%/.exec(said)?.[1] ?? NaN);
+      if (!Number.isNaN(equity)) walk.push(equity);
+    }
+    expect(walk.length).toBeGreaterThan(5);
+    for (let at = 1; at < walk.length; at += 1) {
+      expect(walk[at], "strongest first").toBeLessThanOrEqual(walk[at - 1] + 1e-6);
+    }
+
+    // Painting cuts the circle in two, and each wedge is sorted on its own.
+    row(app, "set").click();
+    app.render();
+    // Which group a wedge is stays at the rim, in the group's own colour; the
+    // middle of the pie says equity and nothing else.
+    const rims = Array.from(app.output.querySelectorAll<SVGElement>(".pie .slice-rim"));
+    expect(rims).toHaveLength(2);
+    expect(new Set(rims.map((rim) => rim.style.getPropertyValue("--mark"))).size).toBe(2);
+
+    // The pointer names the hand it is over, and the matrix outlines it.
+    pointAt(app, 0.02);
+    const readout = app.output.querySelector<HTMLElement>(".pie-readout")!;
+    expect(readout.classList.contains("live")).toBe(true);
+    expect(chrome.peekCombo).not.toBeNull();
+    const outlined = app.range.querySelector<HTMLElement>(".cell.peek");
+    expect(outlined, "the matrix says which hand that is").not.toBeNull();
+    expect(readout.textContent).toMatch(/\d+\.\d\d%/);
+
+    // And lets go of it when the pointer leaves.
+    app.output
+      .querySelector<SVGSVGElement>(".pie")!
+      .dispatchEvent(new window.MouseEvent("pointerleave", { bubbles: true }));
+    app.render();
+    expect(chrome.peekCombo).toBeNull();
+    expect(app.range.querySelector(".cell.peek")).toBeNull();
+    app.teardown();
+  }, 30000);
+
+  test("a group holding the best and the worst of the range says so", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    // Kings are a set on this board and five-four is nothing at all: one
+    // colour holding both is as polar as a group gets.
+    type(app, "KK, 54o");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "AA");
+    seats2(app)[0].click();
+    app.render();
+    headButton(app.stats, "Clear").click();
+    app.render();
+    tab(app, "groups").click();
+    app.render();
+
+    const spread = () => {
+      const heats = Array.from(app.output.querySelectorAll<SVGElement>(".pie .grain")).map(
+        (grain) => Number(grain.style.getPropertyValue("--heat")),
+      );
+      return Math.max(...heats) - Math.min(...heats);
+    };
+    // One wedge running from green to red: the colour turns over inside the
+    // group, which is the whole of what makes it visible.
+    expect(spread()).toBeGreaterThan(0.4);
+
+    // A range of hands that are all worth about the same is one even colour.
+    type(app, "T9o, 98o");
+    app.render();
+    expect(spread()).toBeLessThan(0.2);
+    app.teardown();
+  }, 30000);
+
+  test("nothing to measure against leaves the flat wedges alone", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, "AA, KK, 72o");
+    tab(app, "groups").click();
+    app.render();
+
+    // The second seat is empty, so there is nothing for a hand to be strongest
+    // against, and the pie says what it always said - flat wedges, no reading
+    // under the pointer, and nothing invented to fill the gap.
+    expect(grains(app)).toHaveLength(0);
+    expect(app.output.querySelectorAll(".pie .slice").length).toBeGreaterThan(0);
+    expect(app.output.querySelector(".pie-readout")).toBeNull();
+    app.teardown();
+  }, 30000);
+
+  test("over every flop at once, once the pass has run", async () => {
+    const app = await open();
+    type(app, "AA, KK, 72o");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "QQ, JJ");
+    seats2(app)[0].click();
+    app.render();
+    tab(app, "groups").click();
+    app.render();
+    expect(state().board).toBe("");
+
+    // Before the pass there is nothing to divide up, and the panel says so.
+    expect(grains(app)).toHaveLength(0);
+
+    // The pass answers both questions at once - what the range makes on a flop
+    // it has not seen, and what each hand is worth over those flops - so the
+    // wedges can be read hand by hand here too.
+    const run = Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".btn")).find((button) =>
+      button.textContent?.startsWith("Calculate over"),
+    )!;
+    run.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+    expect(grains(app).length).toBeGreaterThan(1);
+
+    pointAt(app, 0.02);
+    expect(chrome.peekCombo).not.toBeNull();
+    expect(app.range.querySelector(".cell.peek")).not.toBeNull();
+    expect(app.output.querySelector(".pie-readout")!.textContent).toMatch(/\d+\.\d\d%/);
+    app.teardown();
+  }, 60000);
+});
+
+describe("a second copy of a range", () => {
+  const copies = (app: App) =>
+    Array.from(app.strip.querySelectorAll<HTMLButtonElement>(".seat-copy"));
+
+  test("the copy button beside the cross, and none on a dealt hand", async () => {
+    const app = await open();
+    type(app, "22+, AJs+");
+    const typed = state().players[state().active].notation;
+
+    // A copy of the range, which joins the table as a seat of its own and
+    // takes the next letter rather than a second A.
+    copies(app)[0].click();
+    app.render();
+    expect(state().players).toHaveLength(3);
+    const copy = state().players.length - 1;
+    expect(state().players[copy].notation).toBe(typed);
+    expect(state().players.map((player) => player.name)).toEqual(["Range A", "Range B", "Range C"]);
+
+    // A copy is a range of its own: changing it leaves the original alone.
+    seats2(app)[copy].click();
+    app.render();
+    type(app, "AA");
+    expect(state().players[0].notation).toBe(typed);
+    expect(state().players[copy].notation).toBe("AA");
+
+    // Two cards out of the deck cannot be dealt twice, so a dealt hand has no
+    // copy button at all.
+    app.strip.querySelector<HTMLButtonElement>(".deal-hand")!.click();
+    app.render();
+    card(app.strip, "As");
+    card(app.strip, "Ks");
+    app.render();
+    const dealt = state().players.findIndex((player) => player.hand !== null);
+    expect(dealt).toBeGreaterThanOrEqual(0);
+    expect(copies(app)[dealt].hidden).toBe(true);
+    expect(copies(app)[0].hidden).toBe(false);
+
+    // And none anywhere once the table is full.
+    while (state().players.length < state().maxSeats) {
+      app.strip.querySelector<HTMLButtonElement>(".seat-add")!.click();
+      app.render();
+    }
+    expect(copies(app).every((copy) => copy.hidden)).toBe(true);
+    app.teardown();
+  }, 30000);
+});
+
+describe("a slice of the range rather than its top", () => {
+  /** Which hands are carrying a colour, by the name on the cell. */
+  const painted = (app: App) =>
+    Array.from(app.range.querySelectorAll<HTMLElement>(".cell"))
+      .map((cell, index) => ({
+        label: cell.querySelector(".cell-label")?.textContent ?? "",
+        shares: state().classColours[index] ?? [],
+      }))
+      .filter((cell) => cell.shares.slice(1).some((share) => share > 0))
+      .map((cell) => cell.label);
+
+  test("two handles, and a bigger copy of them under the pointer", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, "22+, A2s+, KJs+, AJo+");
+    headButton(app.stats, "Clear").click();
+    app.render();
+
+    const row = app.stats.querySelector<HTMLElement>(".share-row")!;
+    const readout = app.stats.querySelector<HTMLElement>(".share-value")!;
+    const handles = (where: string) =>
+      Array.from(app.stats.querySelectorAll<HTMLInputElement>(`${where} .share-slider`));
+    const drag = (handle: HTMLInputElement, to: number) => {
+      handle.value = String(to);
+      handle.dispatchEvent(new window.Event("input", { bubbles: true }));
+      app.render();
+    };
+
+    // Two of them in the row and two in the popup, so either can be dragged.
+    expect(handles(".share-row > .slice-track")).toHaveLength(2);
+    expect(handles(".slice-popup")).toHaveLength(2);
+    expect(readout.textContent).toBe("all");
+
+    // The top, which is what the single handle used to do.
+    const [small, smallTo] = handles(".share-row > .slice-track");
+    drag(smallTo, 40);
+    expect(readout.textContent).toMatch(/^top \d+%/);
+    const top = new Set(painted(app));
+    expect(top.size).toBeGreaterThan(0);
+
+    // And the middle, which it could not: hands too weak for the top of the
+    // range and too strong for the bottom of it. Cells rather than combos, so a
+    // hand whose suits straddle the line is in both - what has to be true is
+    // that the slice starts below the top and reaches hands the top never did.
+    const above = chrome.cut!.threshold;
+    drag(small, 40);
+    drag(smallTo, 75);
+    expect(readout.textContent).toMatch(/^\d+\u2013\d+%/);
+    expect(chrome.cut!.from).toBeGreaterThan(0);
+    expect(chrome.cut!.threshold).toBeLessThan(above);
+    const middle = painted(app);
+    expect(middle.length).toBeGreaterThan(0);
+    expect(
+      middle.some((hand) => !top.has(hand)),
+      "a middle slice is not the top",
+    ).toBe(true);
+
+    // The bottom of it reads as the bottom rather than as a pair of numbers.
+    drag(smallTo, 100);
+    expect(readout.textContent).toMatch(/^bottom \d+%/);
+
+    // The popup is shut until the pointer arrives, and it names the hand the
+    // far handle has come to rest on along with what that hand is worth.
+    const popup = app.stats.querySelector<HTMLElement>(".slice-popup")!;
+    expect(popup.hidden).toBe(true);
+    row.dispatchEvent(new window.Event("pointerenter", { bubbles: false }));
+    expect(popup.hidden).toBe(false);
+    const said = app.stats.querySelector<HTMLElement>(".slice-readout")!.textContent ?? "";
+    // The combination, not the hand class: the slice is drawn through the
+    // suits, and which one it stopped on is the thing worth naming.
+    expect(said).toMatch(/down to [AKQJT2-9][cdhs][AKQJT2-9][cdhs] at \d+\.\d%/);
+    expect(chrome.cut!.hand).not.toBeNull();
+    expect(said).toContain(chrome.cut!.hand!);
+
+    // The big handles drive the same cut, and the small ones follow them.
+    const [, bigTo] = handles(".slice-popup");
+    drag(bigTo, 60);
+    expect(chrome.cut!.from + chrome.cut!.covered).toBeLessThan(0.65);
+    expect(Number(smallTo.value)).toBeCloseTo(Number(bigTo.value), 6);
+
+    // And it goes away again when the pointer does.
+    row.dispatchEvent(new window.Event("pointerleave", { bubbles: false }));
+    expect(popup.hidden).toBe(true);
+
+    // The whole of it is no slice at all.
+    drag(small, 0);
+    drag(bigTo, 100);
+    expect(chrome.cut).toBeNull();
+    expect(readout.textContent).toBe("all");
+    app.teardown();
   }, 30000);
 });
 

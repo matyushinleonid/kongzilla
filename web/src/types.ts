@@ -160,6 +160,18 @@ export interface Library {
   seats: Array<[string, string]>;
 }
 
+/** How much of a range sits in one band of equity. */
+export interface EquityBucket {
+  key: string;
+  label: string;
+  /** The band, as percentages. */
+  low: number;
+  high: number;
+  combos: number;
+  /** Share of the range, in `0..=1`. */
+  fraction: number;
+}
+
 /** How often each statistic comes with each other one. */
 export interface OverlapMatrix {
   stats: number[];
@@ -219,6 +231,10 @@ export interface Cut {
   covered: number;
   /** The equity of the weakest combo that continues. */
   threshold: number;
+  /** Where the slice starts, as a share of the range. Nought is the top. */
+  from: number;
+  /** The weakest hand in it, which is the one the far handle rests on. */
+  hand: string | null;
   /** The board the slice was taken on. */
   board: string;
   /** How many combos continue. */

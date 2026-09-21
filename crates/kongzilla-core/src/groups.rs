@@ -614,7 +614,7 @@ mod tests {
         // The categories it does not paint read as unpainted, and not one of
         // them is a gear - nobody has picked anything over. A category this
         // range cannot make on this board reads as empty, which is neither.
-        for stat in [StatId::MIDDLE_PAIR, StatId::ACE_HIGH] {
+        for stat in [StatId::SECOND_PAIR, StatId::ACE_HIGH] {
             assert_eq!(groups.mark(stat, &range, &stats).key(), "none", "{stat:?}");
         }
         for stat in StatId::all() {

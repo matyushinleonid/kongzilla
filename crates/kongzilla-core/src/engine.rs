@@ -71,6 +71,100 @@ pub struct FromLibrary {
     pub pristine: Range,
 }
 
+/// One band of the equity range.
+///
+/// The boundaries are quarters, which is the reading they are meant to carry:
+/// better than three hands in four, better than half, worse than half, worse
+/// than three in four.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum EquityBand {
+    /// Ahead of three quarters of what it is against.
+    Best,
+    /// Ahead, but not by that much.
+    Good,
+    /// Behind, but not by that much.
+    Weak,
+    /// Behind three quarters of it.
+    Trash,
+}
+
+impl EquityBand {
+    /// Every band, strongest first.
+    pub const ALL: [EquityBand; 4] = [Self::Best, Self::Good, Self::Weak, Self::Trash];
+
+    /// Which band a hand's equity falls in.
+    pub fn of(equity: f32) -> Self {
+        if equity >= 0.75 {
+            Self::Best
+        } else if equity >= 0.50 {
+            Self::Good
+        } else if equity >= 0.25 {
+            Self::Weak
+        } else {
+            Self::Trash
+        }
+    }
+
+    /// A stable identifier.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Best => "best",
+            Self::Good => "good",
+            Self::Weak => "weak",
+            Self::Trash => "trash",
+        }
+    }
+
+    /// The name shown in the panel.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Best => "best hands",
+            Self::Good => "good hands",
+            Self::Weak => "weak hands",
+            Self::Trash => "trash hands",
+        }
+    }
+
+    /// The bottom of the band, as a percentage.
+    pub const fn low(self) -> u8 {
+        match self {
+            Self::Best => 75,
+            Self::Good => 50,
+            Self::Weak => 25,
+            Self::Trash => 0,
+        }
+    }
+
+    /// The top of it.
+    pub const fn high(self) -> u8 {
+        match self {
+            Self::Best => 100,
+            Self::Good => 75,
+            Self::Weak => 50,
+            Self::Trash => 25,
+        }
+    }
+}
+
+/// How much of a range sits in one band of equity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub struct EquityBucket {
+    /// A stable identifier.
+    pub key: &'static str,
+    /// The name shown in the panel.
+    pub label: &'static str,
+    /// The bottom of the band, as a percentage.
+    pub low: u8,
+    /// The top of it.
+    pub high: u8,
+    /// Weighted combos in the band.
+    pub combos: f64,
+    /// Share of the range, in `0.0..=1.0`.
+    pub fraction: f64,
+}
+
 /// What the range slider is cutting, and where its two handles sit.
 ///
 /// Both handles are percentages of the whole deck: nought is no hands and a
@@ -148,6 +242,10 @@ pub struct Cut {
     pub covered: f64,
     /// The equity of the weakest combo that continues.
     pub threshold: f32,
+    /// Where the slice starts, as a share of the range. Nought is the top.
+    pub from: f64,
+    /// The weakest hand in the slice, which is the one a handle is resting on.
+    pub hand: Option<String>,
     /// The board the slice was taken on, as text.
     pub board: String,
     /// The painting from before the cut, so dropping it puts that back.
@@ -474,6 +572,29 @@ impl Session {
         Some(self.add_player(format!("Range {letter}")))
     }
 
+    /// Adds a seat holding a copy of one that is already there.
+    ///
+    /// The matrix, the painting and whatever the street filters are holding,
+    /// so the copy is somewhere to try a change without losing what it was a
+    /// change from - which is the whole point of having it.
+    ///
+    /// A dealt hand cannot be copied: its two cards are out of the deck, and a
+    /// second seat holding them would be the same cards dealt twice.
+    pub fn duplicate_seat(&mut self, index: usize) -> Option<usize> {
+        if self.players.len() >= Self::MAX_SEATS {
+            return None;
+        }
+        let player = self.players.get(index)?;
+        if player.is_hand() {
+            return None;
+        }
+        let mut copy = player.clone();
+        let ranges = self.players.iter().filter(|p| !p.is_hand()).count();
+        copy.name = format!("Range {}", char::from(b'A' + ranges as u8));
+        self.players.push(copy);
+        Some(self.players.len() - 1)
+    }
+
     /// Removes a seat, keeping at least two.
     ///
     /// Returns whether it went. The seats after it move up, and the names move
@@ -630,6 +751,51 @@ impl Session {
             low: 0.0,
             high,
         };
+    }
+
+    /// The range split by how much equity each hand has.
+    ///
+    /// A different question from the ladder above it, and a better one for
+    /// some purposes: the ladder says what a hand *is*, and this says what it
+    /// is worth. Second pair with a flushdraw and top pair with nothing are
+    /// rungs apart and about the same hand to play.
+    ///
+    /// Four bands rather than ten, because the reader is being asked to take
+    /// in a shape rather than look a number up - there is an equity graph two
+    /// panels over for that.
+    ///
+    /// Empty when there is no per-hand equity to be had: nobody to measure
+    /// against, or no board and no pass over the flops yet.
+    pub fn equity_buckets(&self) -> Vec<EquityBucket> {
+        let Some(equity) = self.equity_by_combo() else {
+            return Vec::new();
+        };
+        let mine = self.effective_range();
+        let mut held = [0.0f64; EquityBand::ALL.len()];
+        let mut total = 0.0f64;
+        for combo in self.cache.live().iter() {
+            let weight = f64::from(mine.get(combo));
+            let value = equity.equity[combo.index() as usize];
+            if weight <= 0.0 || value < 0.0 {
+                continue;
+            }
+            held[EquityBand::of(value) as usize] += weight;
+            total += weight;
+        }
+        if total <= 0.0 {
+            return Vec::new();
+        }
+        EquityBand::ALL
+            .into_iter()
+            .map(|band| EquityBucket {
+                key: band.key(),
+                label: band.label(),
+                low: band.low(),
+                high: band.high(),
+                combos: held[band as usize],
+                fraction: held[band as usize] / total,
+            })
+            .collect()
     }
 
     /// Where the slider's handles have somewhere to stop.
@@ -917,6 +1083,140 @@ impl Session {
         self.active_mut().groups = groups;
     }
 
+    /// Paints part of a category, taken by equity.
+    ///
+    /// `from` and `to` are percentages of the category, strongest first: the
+    /// whole of it is `0..100`, its best fifth is `0..20`, its worst quarter
+    /// is `75..100`. A reader building a betting range wants the best of the
+    /// rubbish in it and the worst of the good, and the category on its own
+    /// cannot say which those are - two hands on one rung can be a long way
+    /// apart in what they are worth.
+    ///
+    /// The whole of a category is painted as a category, so it keeps following
+    /// the board as cards come. A part of one cannot: which hands are in it is
+    /// a fact about this board, so those are painted hand by hand and stay
+    /// where they were put.
+    ///
+    /// Returns whether there was anything to paint.
+    pub fn paint_stat_part(&mut self, stat: StatId, from: f64, to: f64, colour: Colour) -> bool {
+        if from <= 0.0 && to >= 100.0 {
+            self.paint_stat(stat, colour);
+            return true;
+        }
+        let held = self.hands_carrying(|mask| mask.has(stat));
+        self.paint_slice(&held, from, to, colour)
+    }
+
+    /// Paints part of one band of the equity range, taken by equity.
+    ///
+    /// The band says which hands; `from` and `to` say which part of them, in
+    /// the same way as [`Session::paint_stat_part`].
+    pub fn paint_equity_band(
+        &mut self,
+        band: EquityBand,
+        from: f64,
+        to: f64,
+        colour: Colour,
+    ) -> bool {
+        let Some(equity) = self.equity_by_combo() else {
+            return false;
+        };
+        let mine = self.effective_range();
+        let held: Vec<(Combo, f32, f32)> = self
+            .cache
+            .live()
+            .iter()
+            .filter_map(|combo| {
+                let weight = mine.get(combo);
+                let value = equity.equity[combo.index() as usize];
+                let wanted = weight > 0.0 && value >= 0.0 && EquityBand::of(value) == band;
+                wanted.then_some((combo, weight, value))
+            })
+            .collect();
+        self.paint_slice(&held, from, to, colour)
+    }
+
+    /// Every hand in the range whose classification answers `wanted`, with what
+    /// it weighs and what it is worth.
+    fn hands_carrying(&self, wanted: impl Fn(StatMask) -> bool) -> Vec<(Combo, f32, f32)> {
+        let equity = self.equity_by_combo();
+        let mine = self.effective_range();
+        self.cache
+            .live()
+            .iter()
+            .filter_map(|combo| {
+                let weight = mine.get(combo);
+                if weight <= 0.0 || !wanted(self.cache.mask(combo)) {
+                    return None;
+                }
+                let value = equity
+                    .as_ref()
+                    .map_or(-1.0, |by| by.equity[combo.index() as usize]);
+                Some((combo, weight, value))
+            })
+            .collect()
+    }
+
+    /// Paints the `from..to` percent of some hands, strongest first.
+    ///
+    /// Whole runs of equal equity move together, as everywhere else a slice is
+    /// taken by equity: three of a pair of aces is not a decision anybody
+    /// makes, it is an artefact of where a boundary happened to land.
+    fn paint_slice(
+        &mut self,
+        held: &[(Combo, f32, f32)],
+        from: f64,
+        to: f64,
+        colour: Colour,
+    ) -> bool {
+        if !self.editable() || held.is_empty() {
+            return false;
+        }
+        // With no equity to sort by there is no part to take, so the whole of
+        // it is painted rather than an arbitrary piece.
+        let sortable = held.iter().all(|(_, _, value)| *value >= 0.0);
+        let mut order: Vec<(Combo, f32, f32)> = held.to_vec();
+        if sortable {
+            order.sort_by(|a, b| b.2.total_cmp(&a.2));
+        }
+        let total: f64 = order.iter().map(|(_, weight, _)| f64::from(*weight)).sum();
+        if total <= 0.0 {
+            return false;
+        }
+        let (low, high) = if from <= to { (from, to) } else { (to, from) };
+        let start = total * (low / 100.0);
+        let end = total * (high / 100.0);
+
+        let mut painted = false;
+        let mut covered = 0.0f64;
+        let mut at = 0usize;
+        while at < order.len() {
+            // The run of hands worth exactly the same, taken or left together.
+            let mut run = at + 1;
+            if sortable {
+                while run < order.len() && order[run].2 == order[at].2 {
+                    run += 1;
+                }
+            } else {
+                run = order.len();
+            }
+            let weight: f64 = order[at..run]
+                .iter()
+                .map(|(_, weight, _)| f64::from(*weight))
+                .sum();
+            let middle = covered + weight / 2.0;
+            if middle >= start - 1e-9 && middle <= end + 1e-9 {
+                for (combo, _, _) in &order[at..run] {
+                    self.paint_combo(*combo, colour);
+                    painted = true;
+                }
+            }
+            covered += weight;
+            at = run;
+        }
+        painted
+    }
+
     /// Paints one hand.
     pub fn paint_combo(&mut self, combo: Combo, colour: Colour) {
         if !self.editable() {
@@ -931,6 +1231,40 @@ impl Session {
     /// The colour of one hand.
     pub fn combo_colour(&self, combo: Combo) -> Colour {
         self.active().groups.get(combo, &self.cache)
+    }
+
+    /// How strong every hand is on this board, by combo index.
+    ///
+    /// The packed rank of the best five cards it makes, and nought where it
+    /// makes none - before the flop, or where the board is holding one of its
+    /// cards. Two hands can be worth the same equity and not be the same hand:
+    /// against one opponent a queen-high flush and a jack-high one win the
+    /// same, and it is still the queen-high flush that is the better hand.
+    pub fn rank_by_combo(&self) -> Vec<u32> {
+        let board = self.board.mask();
+        if self.board.cards().count() < 3 {
+            return Vec::new();
+        }
+        (0..crate::cards::NUM_COMBOS)
+            .map(|index| {
+                let combo = Combo::from_index(index as u16);
+                if combo.mask().intersects(board) {
+                    return 0;
+                }
+                crate::eval::eval(board.union(combo.mask())).value()
+            })
+            .collect()
+    }
+
+    /// The colour of every hand, by combo index.
+    ///
+    /// The pie reads all of them at once, and asking one at a time across the
+    /// boundary is the sort of thing that turns a redraw into a stutter.
+    pub fn colour_by_combo(&self) -> Vec<Colour> {
+        let groups = &self.active().groups;
+        (0..crate::cards::NUM_COMBOS)
+            .map(|index| groups.get(Combo::from_index(index as u16), &self.cache))
+            .collect()
     }
 
     /// What a statistic's marker shows: one colour, a gear, or nothing.
@@ -1383,10 +1717,26 @@ impl Session {
     /// the matrix moves only when a street's filter is pressed. Returns `None`
     /// before the flop, where per-combo equity is sampled and far too noisy.
     pub fn set_continue_by_equity(&mut self, share: f64) -> Option<Cut> {
+        self.set_continue_between(0.0, share)
+    }
+
+    /// Paints a slice of the range, taken by equity, strongest first.
+    ///
+    /// `from` and `to` are shares of the range: the top fifth is `0.0..0.2`,
+    /// the middle is `0.3..0.7`, the bottom quarter is `0.75..1.0`. One handle
+    /// only ever reached the top, and the top is not the only part of a range
+    /// worth looking at - a reader wants the hands that are neither good
+    /// enough to raise nor bad enough to fold about as often.
+    ///
+    /// The whole of it is no slice at all, and puts back what was painted
+    /// before.
+    pub fn set_continue_between(&mut self, from: f64, to: f64) -> Option<Cut> {
         if !self.editable() {
             return None;
         }
-        let share = share.clamp(0.0, 1.0);
+        let (from, to) = if from <= to { (from, to) } else { (to, from) };
+        let from = from.clamp(0.0, 1.0);
+        let share = to.clamp(0.0, 1.0) - from;
         // Moving the slider a second time must not remember the state the first
         // move left behind: the marks to restore are the ones from before any of
         // this started.
@@ -1395,7 +1745,7 @@ impl Session {
             Some(previous) => previous.restore,
             None => self.active().groups.clone(),
         };
-        if share >= 1.0 {
+        if share >= 1.0 || share <= 0.0 {
             self.active_mut().groups = restore;
             return None;
         }
@@ -1428,9 +1778,12 @@ impl Session {
         }
         ordered.sort_by(|a, b| b.1.total_cmp(&a.1));
 
-        let target = share * total;
+        let start = from * total;
+        let target = (from + share) * total;
         let mut range = Range::empty();
         let mut covered = 0.0f64;
+        let mut skipped = 0.0f64;
+        let mut hand = None;
         let mut threshold = 1.0f32;
         // A hair under the target still counts as reaching it. The share
         // arrives from a slider that snapped to a step, and the step came back
@@ -1438,13 +1791,24 @@ impl Session {
         // ten-millionth short of its own boundary and the slice takes a whole
         // extra run of hands, so the panel disagreed with the slider.
         let reached = target - total * 1e-6;
+        let begins = start - total * 1e-6;
         let mut at = 0;
-        while at < ordered.len() && covered < reached {
+        // Past the hands above the slice first, whole runs at a time, and then
+        // through the slice itself the same way.
+        while at < ordered.len() && skipped < begins {
+            let value = ordered[at].1;
+            while at < ordered.len() && ordered[at].1 == value {
+                skipped += f64::from(ordered[at].2);
+                at += 1;
+            }
+        }
+        while at < ordered.len() && skipped + covered < reached {
             let value = ordered[at].1;
             while at < ordered.len() && ordered[at].1 == value {
                 let (combo, _, weight) = ordered[at];
                 range.set(combo, weight);
                 covered += f64::from(weight);
+                hand = Some(combo.to_string());
                 at += 1;
             }
             threshold = value;
@@ -1467,6 +1831,8 @@ impl Session {
             share,
             covered: covered / total,
             threshold,
+            from,
+            hand,
             board: self.board.to_string(),
             restore,
             range,
@@ -1835,6 +2201,21 @@ impl Session {
         let mut result = breakdown.clone();
         result.hit = result.hit_for(self.checkmarks);
         Some(result)
+    }
+
+    /// Which hands are behind each tier of the last pass, as weights.
+    ///
+    /// Laid out as `combo * 4 + tier`, and empty when no pass is standing for
+    /// the range as it is. Read separately from the breakdown because it is
+    /// five thousand numbers that only the pie asks for.
+    pub fn preflop_tiers(&self) -> Vec<f32> {
+        let key = self.preflop_key();
+        let cache = self.preflop_cache.borrow();
+        cache
+            .iter()
+            .find(|(cached, _)| *cached == key)
+            .map(|(_, breakdown)| breakdown.tiers.clone())
+            .unwrap_or_default()
     }
 
     /// Everything neither side of a per-hand equity calculation can hold.
@@ -2972,7 +3353,7 @@ mod tests {
             );
         }
         assert_eq!(session.mark(StatId::TOP_PAIR).key(), "blue");
-        assert_eq!(session.mark(StatId::MIDDLE_PAIR).key(), "none");
+        assert_eq!(session.mark(StatId::SECOND_PAIR).key(), "none");
     }
 
     #[test]
@@ -3598,13 +3979,13 @@ mod tests {
     fn inverting_the_categories_flips_the_marks_and_nothing_else() {
         let mut session = session_on("Kh 7h 2c", "22+,A2s+,KJs+,AJo+");
         assert_eq!(session.mark(StatId::TOP_PAIR).key(), "blue");
-        assert_eq!(session.mark(StatId::MIDDLE_PAIR).key(), "none");
+        assert_eq!(session.mark(StatId::SECOND_PAIR).key(), "none");
 
         session.invert_categories();
 
         // Every mark down the side of the panel turns over.
         assert_eq!(session.mark(StatId::TOP_PAIR).key(), "none");
-        assert_eq!(session.mark(StatId::MIDDLE_PAIR).key(), "blue");
+        assert_eq!(session.mark(StatId::SECOND_PAIR).key(), "blue");
         // And nothing was picked over, so nothing grows a gear.
         for stat in StatId::all() {
             assert_ne!(session.mark(stat).key(), "mixed", "{stat:?} grew a gear");
@@ -3648,7 +4029,7 @@ mod tests {
     fn inverting_gives_back_what_was_not_painted() {
         let mut session = session_on("Kh 7h 2c", "22+,A2s+,KJs+,AJo+");
         assert_eq!(session.mark(StatId::TOP_PAIR).key(), "blue");
-        assert_eq!(session.mark(StatId::MIDDLE_PAIR).key(), "none");
+        assert_eq!(session.mark(StatId::SECOND_PAIR).key(), "none");
         let before = session.group_shares();
 
         session.invert_groups();
@@ -3743,7 +4124,7 @@ mod tests {
         let mut session = session_on("Kh 7h 2c", "22+,A2s+,KJs+,AJo+");
         assert_eq!(session.mark(StatId::TOP_PAIR).key(), "blue");
         assert_eq!(session.mark(StatId::FLUSH_DRAW).key(), "blue");
-        assert_ne!(session.mark(StatId::MIDDLE_PAIR).key(), "blue");
+        assert_ne!(session.mark(StatId::SECOND_PAIR).key(), "blue");
 
         // A new card re-reads the default, because it is still the default.
         session.push_board_card(Card::parse("2s").unwrap());
@@ -4211,6 +4592,162 @@ mod tests {
                 "{hand}: {mine:.4} against {check:.4}"
             );
         }
+    }
+
+    #[test]
+    fn the_range_splits_into_four_bands_of_equity() {
+        // The other question the panel answers: not what a hand is, but what
+        // it is worth. A set and a gutshot are rungs apart on the ladder and
+        // the bands put them where they belong.
+        let mut session = session_on("Kh 7d 2c", "22+, A2s+, K9s+, A8o+");
+        session.set_active(1);
+        session
+            .set_active_range_text("22+, A2s+, K2s+, Q8s+, J9s+, A2o+, K9o+")
+            .unwrap();
+        session.set_active(0);
+
+        let bands = session.equity_buckets();
+        assert_eq!(
+            bands.iter().map(|band| band.label).collect::<Vec<_>>(),
+            ["best hands", "good hands", "weak hands", "trash hands"]
+        );
+        // They are the whole range and nothing twice.
+        let whole: f64 = bands.iter().map(|band| band.fraction).sum();
+        assert!((whole - 1.0).abs() < 1e-9, "{whole}");
+        assert!(bands.iter().all(|band| band.fraction >= 0.0));
+        assert!(bands.iter().any(|band| band.fraction > 0.0));
+
+        // A king on the board, so a range holding kings has something in the
+        // top band and something in the bottom one.
+        assert!(bands[0].fraction > 0.0, "{:?}", bands[0]);
+        assert!(bands[3].fraction > 0.0, "{:?}", bands[3]);
+
+        // The bands are quarters, which is what makes them readable without a
+        // legend - and they meet without a gap or an overlap.
+        for (band, (low, high)) in bands.iter().zip([(75, 100), (50, 75), (25, 50), (0, 25)]) {
+            assert_eq!((band.low, band.high), (low, high), "{}", band.label);
+        }
+    }
+
+    #[test]
+    fn there_are_no_bands_without_something_to_measure_against() {
+        // One range and no board: nothing to have equity against, so the block
+        // has nothing to say and says nothing rather than saying nought.
+        let mut session = Session::new();
+        session.set_active_range_text("22+, A2s+").unwrap();
+        assert!(session.equity_buckets().is_empty());
+
+        // A board on its own does not help; it takes two ranges.
+        session.set_board_text("Kh 7d 2c").unwrap();
+        assert!(session.equity_buckets().is_empty());
+    }
+
+    #[test]
+    fn painting_part_of_a_category_takes_it_by_equity() {
+        // The spot this is for: a reader building a betting range wants the
+        // best of the rubbish, and "trash hands" on its own cannot say which
+        // those are.
+        let mut session = session_on("Kh 7d 2c", "22+, A2s+, K9s+, A8o+, KJo+");
+        session.set_active(1);
+        session
+            .set_active_range_text("22+, A2s+, K2s+, Q8s+, J9s+, A2o+, K9o+")
+            .unwrap();
+        session.set_active(0);
+
+        let top_pair = crate::stats::stat_by_key("top-pair").unwrap();
+        let whole = session
+            .breakdown()
+            .row(top_pair)
+            .map(|row| row.combos)
+            .unwrap();
+        assert!(whole > 0.0);
+
+        // Starting from nothing painted, or the default grouping is counted in
+        // as well and every measurement below is of the wrong set.
+        let blue = crate::groups::colour_from_key("blue").unwrap();
+        session.clear_groups();
+
+        // A fifth of it, and the fifth that is worth the most.
+        assert!(session.paint_stat_part(top_pair, 0.0, 20.0, blue));
+        let painted = |session: &Session| -> Vec<Combo> {
+            Combo::all()
+                .filter(|combo| session.active().groups.get(*combo, &session.cache) == blue)
+                .collect()
+        };
+        let best = painted(&session);
+        assert!(!best.is_empty());
+        assert!((best.len() as f64) < whole);
+
+        // And the worst fifth is a different set of hands, all of them worth
+        // less than the best fifth.
+        session.clear_groups();
+        assert!(session.paint_stat_part(top_pair, 80.0, 100.0, blue));
+        let worst = painted(&session);
+        assert!(!worst.is_empty());
+        assert!(
+            worst.iter().all(|combo| !best.contains(combo)),
+            "the two ends overlap"
+        );
+
+        let equity = session.equity_by_combo().expect("two ranges on a board");
+        let value = |combo: &Combo| equity.equity[combo.index() as usize];
+        let floor = best.iter().map(value).fold(f32::INFINITY, f32::min);
+        let ceiling = worst.iter().map(value).fold(f32::NEG_INFINITY, f32::max);
+        assert!(ceiling <= floor, "worst {ceiling} against best {floor}");
+    }
+
+    #[test]
+    fn the_whole_of_a_category_is_still_painted_as_one() {
+        // Nought to a hundred is what a press has always done, and it has to
+        // stay that: a category painted as a category follows the board as the
+        // cards come, and a category painted hand by hand cannot.
+        let mut session = session_on("Kh 7d 2c", "22+, A2s+, K9s+");
+        let top_pair = crate::stats::stat_by_key("top-pair").unwrap();
+        let blue = crate::groups::colour_from_key("blue").unwrap();
+        assert!(session.paint_stat_part(top_pair, 0.0, 100.0, blue));
+        assert_eq!(session.mark(top_pair).key(), "blue");
+    }
+
+    #[test]
+    fn the_slice_can_be_taken_from_anywhere_in_the_range() {
+        // One handle only ever reached the top, and the top is not the only
+        // part of a range worth looking at - the hands that are neither good
+        // enough to raise nor bad enough to fold are in the middle.
+        let mut session = session_on("Kh 7d 2c", "22+, A2s+, K9s+, A8o+, KJo+");
+        session.set_active(1);
+        session
+            .set_active_range_text("22+, A2s+, K2s+, Q8s+, J9s+, A2o+, K9o+")
+            .unwrap();
+        session.set_active(0);
+
+        let top = session.set_continue_by_equity(0.3).expect("a slice");
+        let middle = session
+            .set_continue_between(0.3, 0.7)
+            .expect("a slice of the middle");
+        assert_eq!(middle.from, 0.3);
+        assert!((middle.share - 0.4).abs() < 1e-9);
+        assert!(middle.covered > 0.0);
+
+        // The middle is worth less than the top and does not overlap it: a
+        // slice is a run of the range, not a second helping of the same hands.
+        assert!(
+            middle.threshold < top.threshold,
+            "{} against {}",
+            middle.threshold,
+            top.threshold
+        );
+        assert!(middle.range.intersection(&top.range).is_empty());
+
+        // The bottom of the range reaches the worst hand there is.
+        let bottom = session.set_continue_between(0.75, 1.0).expect("the tail");
+        assert!(bottom.threshold <= middle.threshold);
+        assert!(bottom.range.intersection(&top.range).is_empty());
+        // And it says which hand its far handle came to rest on.
+        assert!(bottom.hand.is_some());
+
+        // The whole of it is no slice at all, and puts back what was painted.
+        assert!(session.set_continue_between(0.0, 1.0).is_none());
+        assert!(session.cut().is_none());
     }
 
     #[test]

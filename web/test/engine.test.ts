@@ -16,14 +16,32 @@ describe("registry", () => {
   test("arrives in the shape the panels expect", () => {
     const defs = JSON.parse(Engine.statDefinitions());
     expect(defs.length).toBeGreaterThanOrEqual(29);
-    defs.forEach(
-      (def: { index: number; key: string; label: string; block: string }, index: number) => {
-        expect(def.index).toBe(index);
-        expect(def.key).toBeTruthy();
-        expect(def.label).toBeTruthy();
-        expect(["made", "draw", "combination"]).toContain(def.block);
-      },
-    );
+    const seen = new Set<number>();
+    for (const def of defs as Array<{
+      index: number;
+      key: string;
+      label: string;
+      block: string;
+    }>) {
+      // The list arrives in the order the ladder shows them, which is not the
+      // order they are numbered in: an index is a place in a saved link and
+      // may never move, so a rung added between two others is numbered last
+      // and placed where it reads. What must hold is that every statistic is
+      // here exactly once.
+      expect(seen.has(def.index)).toBe(false);
+      seen.add(def.index);
+      expect(def.index).toBeLessThan(defs.length);
+      expect(def.key).toBeTruthy();
+      expect(def.label).toBeTruthy();
+      expect(["made", "draw", "combination"]).toContain(def.block);
+    }
+    expect(seen.size).toBe(defs.length);
+
+    // And the blocks are whole: a reader sees three runs, not three shuffled
+    // together.
+    const blocks = (defs as Array<{ block: string }>).map((def) => def.block);
+    const runs = blocks.filter((block, at) => block !== blocks[at - 1]);
+    expect(runs).toEqual(["made", "draw", "combination"]);
   });
 
   test("ships block headings, class labels and rankings", () => {

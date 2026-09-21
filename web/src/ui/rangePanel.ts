@@ -370,10 +370,19 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
   // are not comparable - a raked NL25 range and a chip-EV range at the same
   // depth are different answers to different questions. Within a block the
   // chips say which format, and their tooltips say what the difference is.
+  //
+  // The headings say where the charts came from, which is a solver somebody
+  // else built: the stylesheet has been putting a "there is more to read here"
+  // cursor on them for a while with nothing behind it, and this is the honest
+  // thing to put there.
   const GAMES: Array<[string, string]> = [
     ["mtt", "MTT chip-EV"],
     ["cash", "6-max cash"],
   ];
+
+  /** Where every chart in the library came from. */
+  const STOLEN_FROM = "Stolen from \u{1F9D9}";
+
   const libraries = document.createElement("div");
   libraries.className = "libraries";
 
@@ -469,6 +478,7 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
     const heading = document.createElement("span");
     heading.className = "field-label library-label";
     heading.textContent = label;
+    heading.title = STOLEN_FROM;
     const stackRow = document.createElement("div");
     stackRow.className = "chips stacks";
     block.append(heading, stackRow);

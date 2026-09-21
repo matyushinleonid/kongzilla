@@ -683,7 +683,20 @@ describe("the statistics panel", () => {
     const headings = Array.from(stats.element.querySelectorAll(".stat-block .sub-title")).map(
       (node) => node.textContent,
     );
-    expect(headings).toEqual(["Made hands", "Draws", "Combinations"]);
+    // Three blocks of what a hand *is*, and under them one of what it is
+    // worth - the same range read the other way round.
+    expect(headings).toEqual(["Made hands", "Draws", "Combinations", "By equity"]);
+
+    // A rung with nothing on it is not drawn, so the whole ladder takes a
+    // range that reaches every step of it: a pair at each board card, and a
+    // pocket pair in each gap between them.
+    const was = state().players[state().active].notation;
+    const restore = onBoard("Kh 9s 4c");
+    // AQo is in it to be nothing at all: the slice below runs to "ace high",
+    // and a ladder with no ace-high hand on it has no end to slice to.
+    setRange("22, 33, 77, TT, AA, AKo, AQo, A9o, A4o");
+    mutate((engine) => engine.clearFilters());
+    renderAll();
 
     const labels = Array.from(
       stats.element.querySelectorAll<HTMLElement>(".stat-row:not([hidden]) .stat-label"),
@@ -694,13 +707,18 @@ describe("the statistics panel", () => {
       "overpair",
       "top pair",
       "pp < top card",
-      "middle pair",
+      "second pair",
       "pp < 2nd card",
       "bottom pair",
       "pp < board",
     ]);
-    expect(labels).toContain("oesd (2 card)");
-    expect(labels).toContain("gutshot (1 crd)");
+    // Three ranks on the board, so there is no third or fourth pair to have -
+    // the lowest card is the bottom pair and nothing is named twice.
+    expect(labels).not.toContain("third pair");
+    expect(labels).not.toContain("fourth pair");
+    restore();
+    setRange(was);
+    renderAll();
   });
 
   test("painting a row marks it; a street filter is what narrows the range", () => {
@@ -863,7 +881,7 @@ describe("the statistics panel", () => {
     setRange("22+, A2s+, KJs+, AJo+");
     mutate((engine) => engine.clearFilters());
     renderAll();
-    const slider = stats.element.querySelector<HTMLInputElement>(".share-slider")!;
+    const slider = stats.element.querySelector<HTMLInputElement>(".share-slider.slice-to")!;
     const readout = stats.element.querySelector(".share-value")!;
     const clear = stats.element.querySelector<HTMLButtonElement>(".cut-clear")!;
 
@@ -878,7 +896,7 @@ describe("the statistics panel", () => {
 
     // The readout names the equity the cut landed on, which is the number that
     // actually decides whether continuing is right.
-    expect(readout.textContent).toMatch(/^\d+% · \d+%\+ eq$/);
+    expect(readout.textContent).toMatch(/^top \d+% · \d+%\+ eq$/);
     expect(chrome.cut).not.toBeNull();
 
     // Equity across a range is a staircase, so the slider stops on the step at
@@ -984,6 +1002,16 @@ describe("the statistics panel", () => {
       Array.from(where.querySelectorAll<HTMLButtonElement>(".stack-chip")).find(
         (chip) => chip.textContent === label,
       );
+
+    // Both headings carry something, because the stylesheet gives them the
+    // cursor that says there is more to read - and a cursor that promises an
+    // explanation and delivers none is worse than a plain one. What they carry
+    // is where the charts came from.
+    for (const block of [mtt(), cash()]) {
+      expect(block.querySelector<HTMLElement>(".library-label")!.title).toBe(
+        "Stolen from \u{1F9D9}",
+      );
+    }
 
     // Two headings, each naming its own game - a raked cash range and a chip-EV
     // range at the same depth are different answers, not two depths of one.
@@ -1115,7 +1143,7 @@ describe("the statistics panel", () => {
     renderAll();
     const first = statRow("overpair");
     const second = statRow("top pair");
-    const third = statRow("middle pair");
+    const third = statRow("second pair");
     const mark = (row: HTMLElement) => row.querySelector<HTMLElement>(".filter-mark")!;
 
     point(mark(first), "pointerdown");
@@ -1540,6 +1568,37 @@ describe("the keyboard", () => {
     press(" ");
     expect(state().colour).not.toBe(colour);
     mutate((engine) => engine.setColour(colour));
+  });
+
+  test("the title bar offers the whole screen, and says how to leave it", async () => {
+    const bar = document.querySelector<HTMLElement>(".menubar")!;
+    const full = Array.from(bar.querySelectorAll<HTMLButtonElement>(".btn")).find((button) =>
+      /full screen$/i.test(button.textContent ?? ""),
+    )!;
+    expect(full.textContent).toBe("Full screen");
+    expect(full.getAttribute("aria-pressed")).toBe("false");
+
+    // Asking is all the app does; whether it happens is the browser's. Here it
+    // refuses, and the caption has to survive that rather than being left
+    // saying the opposite of what the reader is looking at.
+    full.click();
+    await vi.waitFor(() => expect(full.textContent).toBe("Full screen"));
+
+    // Where it does happen, the caption follows the browser rather than the
+    // press - there are other ways in and out of full screen than this button,
+    // and a caption that only tracked its own clicks would be wrong after any
+    // of them.
+    Object.defineProperty(document, "fullscreenElement", {
+      configurable: true,
+      value: document.documentElement,
+    });
+    document.dispatchEvent(new window.Event("fullscreenchange"));
+    expect(full.textContent).toBe("Exit full screen");
+    expect(full.getAttribute("aria-pressed")).toBe("true");
+
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
+    document.dispatchEvent(new window.Event("fullscreenchange"));
+    expect(full.textContent).toBe("Full screen");
   });
 
   test("the title bar names the sheet, and understates the written pages", () => {

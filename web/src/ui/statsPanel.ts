@@ -22,7 +22,9 @@ import {
   chrome,
   clearCut,
   compareBreakdown,
+  equityBuckets,
   equitySteps,
+  paintEquityBand,
   revision,
   hoverBreakdown,
   mutate,
@@ -42,7 +44,7 @@ import {
 import { track } from "../analytics";
 import { pipText, seatName, seatTag } from "./cards";
 import { press, touchOnly } from "./press";
-import type { Block, StatRow } from "../types";
+import type { Block, EquityBucket, StatRow } from "../types";
 
 /** Preflop the panel marks what counts as a hit; postflop it paints. */
 let preflopMode = false;
@@ -210,47 +212,205 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
     body.append(section);
   }
 
-  // "Paint the top 20%" - by equity on this board, not by the ladder. A class
-  // is a poor proxy for strength: a nut flushdraw and a four-high one are one
-  // statistic and nowhere near each other. This paints with the held colour, so
-  // it moves the markers rather than the matrix, and the street buttons stay
-  // the only thing that narrows anything.
+  /*
+   * The same range read the other way: not what a hand is, but what it is
+   * worth.
+   *
+   * A ladder rung says what a hand *made*, and two hands on one rung can be a
+   * long way apart - second pair with a flushdraw and top pair with nothing
+   * are rungs apart and about the same hand to play. Four bands rather than
+   * ten, because this is for taking in a shape; the equity graph two panels
+   * over is for looking a number up.
+   *
+   * Empty where there is nothing to measure against, and the heading goes with
+   * it - a block reading nought four times over is worse than no block.
+   */
+  const bandBlock = document.createElement("div");
+  bandBlock.className = "stat-block block-bands";
+  const bandHeading = document.createElement("h3");
+  bandHeading.className = "sub-title";
+  bandHeading.textContent = "By equity";
+  bandBlock.append(bandHeading);
+  const bandRows = new Map<string, RowElements>();
+  for (const key of ["best", "good", "weak", "trash"]) {
+    const row = createRow(-1, key);
+    row.element.dataset.band = key;
+    row.element.removeAttribute("data-index");
+    // Pressing one paints it, in whichever part the band asks for. The point
+    // of the pair: press "trash hands" with the band on its best fifth and you
+    // have the best of the rubbish, which is what goes in a betting range.
+    row.element.addEventListener("click", () => {
+      const colour = state().colour;
+      if (colour === "none") return;
+      paintEquityBand(key, colour);
+      repaint();
+    });
+    bandRows.set(key, row);
+    bandBlock.append(row.element);
+  }
+  body.append(bandBlock);
+
+  /*
+   * Which part of a row a press paints.
+   *
+   * A rung says what a hand made, and two hands on one rung can be a long way
+   * apart in what they are worth - so pressing one and getting all of it is
+   * often not what was meant. Two handles rather than one, because a reader
+   * wants the best of the rubbish about as often as the worst of the good.
+   *
+   * Five per cent a step: the point is to take a slice, not to tune one, and
+   * a slider that stopped at every per cent would be a slider nobody could
+   * land on twice.
+   */
+  const bandRow = document.createElement("div");
+  bandRow.className = "row band-row";
+  const bandLabel = document.createElement("span");
+  bandLabel.className = "field-label";
+  bandLabel.textContent = "A row paints";
+  const bandFrom = document.createElement("input");
+  const bandTo = document.createElement("input");
+  for (const [handle, which] of [
+    [bandFrom, "where the slice starts"],
+    [bandTo, "where it ends"],
+  ] as const) {
+    handle.type = "range";
+    handle.min = "0";
+    handle.max = "100";
+    handle.step = "5";
+    handle.className = "slider band-slider";
+    handle.setAttribute("aria-label", `Part of a row a press paints, ${which}`);
+  }
+  bandFrom.value = "0";
+  bandTo.value = "100";
+  const bandValue = document.createElement("span");
+  bandValue.className = "band-value num";
+  const bandClear = button("✕", "Put it back to the whole of a row");
+  bandClear.classList.add("band-clear");
+  const bandTrack = document.createElement("span");
+  bandTrack.className = "slider-track band-track";
+  bandTrack.append(bandFrom, bandTo);
+  bandRow.append(bandLabel, bandTrack, bandValue, bandClear);
+
+  const bandMoved = () => {
+    // Clamp rather than swap, so a handle stops at its neighbour.
+    const low = Math.min(Number(bandFrom.value), Number(bandTo.value));
+    const high = Math.max(Number(bandFrom.value), Number(bandTo.value));
+    chrome.rowBand = { low, high };
+    bandFrom.value = String(low);
+    bandTo.value = String(high);
+    repaint();
+  };
+  bandFrom.addEventListener("input", bandMoved);
+  bandTo.addEventListener("input", bandMoved);
+  bandClear.addEventListener("click", () => {
+    chrome.rowBand = { low: 0, high: 100 };
+    bandFrom.value = "0";
+    bandTo.value = "100";
+    repaint();
+  });
+
+  /*
+   * A slice of the range by equity, taken from anywhere in it.
+   *
+   * By equity on this board, not by the ladder: a rung is a poor proxy for
+   * strength, since a nut flushdraw and a four-high one are one statistic and
+   * nowhere near each other. This paints with the held colour, so it moves the
+   * markers rather than the matrix, and the street buttons stay the only thing
+   * that narrows anything.
+   *
+   * Two handles, because the top was never the only part worth looking at: the
+   * hands that are neither good enough to raise nor bad enough to fold are in
+   * the middle, and one handle could not reach them.
+   *
+   * The row itself is small, and a slider this size is a poor thing to aim at.
+   * So it reads as an indicator and hands the aiming to a larger one, which
+   * opens under the pointer and says which hand the far handle has come to
+   * rest on and what that hand is worth - the number the slice is really
+   * about.
+   */
   const shareRow = document.createElement("div");
   shareRow.className = "row share-row";
   const shareLabel = document.createElement("span");
   shareLabel.className = "field-label";
-  shareLabel.textContent = "Paint top";
-  const shareSlider = document.createElement("input");
-  shareSlider.type = "range";
-  shareSlider.min = "0";
-  shareSlider.max = "100";
-  // Any position, and then snapped to the nearest step below: equity across a
-  // range is a staircase, so most of the positions on a smooth slider paint
-  // exactly what the one beside them paints. The reader still drags anywhere;
-  // what they let go of is a step.
-  shareSlider.step = "any";
-  shareSlider.className = "slider share-slider";
-  shareSlider.setAttribute("aria-label", "Share of the range to paint, by equity");
+  shareLabel.textContent = "Paint slice";
   const shareValue = document.createElement("span");
   shareValue.className = "share-value num";
   const cutClear = button("✕", "Undo, putting back the painting from before");
   cutClear.classList.add("cut-clear");
-  shareRow.append(shareLabel, shareSlider, shareValue, cutClear);
 
-  shareSlider.addEventListener("input", () => {
-    chrome.continueShare = snapToStep(Number(shareSlider.value) / 100);
-    shareSlider.value = String(chrome.continueShare * 100);
-    if (chrome.continueShare >= 1) {
+  /** One handle of the slice, at whichever size. */
+  const sliceHandle = (which: string, what: string) => {
+    const handle = document.createElement("input");
+    handle.type = "range";
+    handle.min = "0";
+    handle.max = "100";
+    // Any position, and then snapped to the nearest step below: equity across
+    // a range is a staircase, so most positions on a smooth slider paint
+    // exactly what the one beside them paints. The reader still drags
+    // anywhere; what they let go of is a step.
+    handle.step = "any";
+    handle.className = `slider share-slider ${which}`;
+    handle.setAttribute("aria-label", `Slice of the range to paint, ${what}`);
+    return handle;
+  };
+  const shareFrom = sliceHandle("slice-from", "where it starts");
+  const shareTo = sliceHandle("slice-to", "where it ends");
+  const shareTrack = document.createElement("span");
+  shareTrack.className = "slider-track slice-track";
+  shareTrack.append(shareFrom, shareTo);
+  shareRow.append(shareLabel, shareTrack, shareValue, cutClear);
+
+  // The larger one, which is where the aiming happens.
+  const slicePopup = document.createElement("div");
+  slicePopup.className = "slice-popup";
+  slicePopup.hidden = true;
+  const sliceTitle = document.createElement("span");
+  sliceTitle.className = "field-label";
+  sliceTitle.textContent = "Paint slice";
+  const bigFrom = sliceHandle("slice-from", "where it starts");
+  const bigTo = sliceHandle("slice-to", "where it ends");
+  const bigTrack = document.createElement("span");
+  bigTrack.className = "slider-track slice-track big";
+  bigTrack.append(bigFrom, bigTo);
+  const sliceReadout = document.createElement("span");
+  sliceReadout.className = "slice-readout num";
+  slicePopup.append(sliceTitle, bigTrack, sliceReadout);
+  shareRow.append(slicePopup);
+
+  const sliceMoved = (from: HTMLInputElement, to: HTMLInputElement) => {
+    const low = snapToStep(Math.min(Number(from.value), Number(to.value)) / 100);
+    const high = snapToStep(Math.max(Number(from.value), Number(to.value)) / 100);
+    chrome.slice = { from: low, to: high };
+    chrome.continueShare = high - low;
+    if (low <= 0 && high >= 1) {
       clearCut();
+      repaint();
       return;
     }
-    setCut(chrome.continueShare);
+    setCut(low, high);
     track("paint_top", true);
-  });
+  };
+  for (const [from, to] of [
+    [shareFrom, shareTo],
+    [bigFrom, bigTo],
+  ] as const) {
+    from.addEventListener("input", () => sliceMoved(from, to));
+    to.addEventListener("input", () => sliceMoved(from, to));
+  }
   cutClear.addEventListener("click", () => {
+    chrome.slice = { from: 0, to: 1 };
     chrome.continueShare = 1;
-    shareSlider.value = "100";
     clearCut();
+    repaint();
+  });
+  // Under the pointer, and gone again when it leaves. A hover rather than a
+  // press: the small one is not a control to open something with, it is the
+  // same control at a size nobody can aim at.
+  shareRow.addEventListener("pointerenter", () => {
+    slicePopup.hidden = false;
+  });
+  shareRow.addEventListener("pointerleave", () => {
+    slicePopup.hidden = true;
   });
 
   const footer = document.createElement("div");
@@ -279,7 +439,7 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
   effective.className = "effective";
   footer.append(streetRow, preflopButton, effective);
 
-  panel.append(head, paletteRow, passRow, preflopNote, body, shareRow, footer);
+  panel.append(head, paletteRow, passRow, bandRow, preflopNote, body, shareRow, footer);
 
   /**
    * Marks which edges have more list behind them.
@@ -300,6 +460,10 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
 
   /** The session the edges were last measured for. */
   let edgesAt = -1;
+
+  /** The bands, and the session they were worked out for. */
+  let bands: EquityBucket[] = [];
+  let bandsAt = -1;
 
   const render = () => {
     const view = state();
@@ -354,33 +518,48 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
     if (stepsAt !== revision() || preflopMode) {
       stepsAt = revision();
       steps = preflopMode ? new Float32Array() : equitySteps();
-      shareSlider.style.setProperty("--ticks", ticks());
+      for (const track of [shareTrack, bigTrack]) {
+        track.style.setProperty("--ticks", ticks());
+      }
     }
-    if (document.activeElement !== shareSlider) {
-      // Exactly where it stands, not rounded to a whole percent: it stands on
-      // a step of the staircase, and rounding moved it off the step it had
+    for (const [from, to] of [
+      [shareFrom, shareTo],
+      [bigFrom, bigTo],
+    ] as const) {
+      // Exactly where they stand, not rounded to a whole percent: they stand on
+      // a step of the staircase, and rounding moved them off the step they had
       // just been snapped to - so the thumb and the number under it disagreed.
-      shareSlider.value = String(chrome.continueShare * 100);
+      if (document.activeElement !== from) from.value = String(chrome.slice.from * 100);
+      if (document.activeElement !== to) to.value = String(chrome.slice.to * 100);
     }
+
     // Equity is equity against somebody, and which somebody is chosen over in
     // the output panel. The slider names it, because a control that quietly
     // depends on a setting two panels away is a control nobody can trust.
     const against = view.versusSeat === null ? null : view.players[view.versusSeat];
     const facing = against ? seatName(against) : null;
-    shareLabel.textContent = against ? `Paint top vs ${seatTag(against)}` : "Paint top";
+    const sliceName = against ? `Paint slice vs ${seatTag(against)}` : "Paint slice";
+    shareLabel.textContent = sliceName;
+    sliceTitle.textContent = sliceName;
     shareLabel.title = facing
-      ? `The strongest share of the range by equity against ${facing}.`
-      : "The strongest share of the range by equity against every other range at once.";
+      ? `A run of the range by equity against ${facing}, from the top down.`
+      : "A run of the range by equity against every other range at once.";
 
     // Report the equity the cut landed on, not the percentage that was asked
     // for: "everything above 61%" is the thing worth knowing.
     const cut = chrome.cut;
     shareValue.textContent = cut
-      ? `${(cut.covered * 100).toFixed(0)}% · ${(cut.threshold * 100).toFixed(0)}%+ eq`
+      ? `${sliceText(cut.from, cut.from + cut.covered)} · ${(cut.threshold * 100).toFixed(0)}%+ eq`
       : "all";
     shareValue.title = cut
-      ? `${cut.combos.toFixed(0)} combos, every one with at least ${(cut.threshold * 100).toFixed(1)}% equity on ${pipText(cut.board)}`
+      ? `${cut.combos.toFixed(0)} combos, down to ${(cut.threshold * 100).toFixed(1)}% equity on ${pipText(cut.board)}`
       : "Nothing painted by equity.";
+    // The hand the far handle has come to rest on, which is the one that says
+    // what the slice really reaches: a percentage is a guess at a range, a hand
+    // is the range itself.
+    sliceReadout.textContent = cut
+      ? `${sliceText(cut.from, cut.from + cut.covered)} · down to ${cut.hand ?? "—"} at ${(cut.threshold * 100).toFixed(1)}%`
+      : "All of it";
     shareRow.classList.toggle("stale-cut", cut !== null && cut.board !== view.board);
     cutClear.hidden = cut === null;
 
@@ -406,11 +585,42 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
     const versus = other === null ? null : new Map(other.rows.map((row) => [row.index, row]));
     const versusSeat = view.compareSeat ?? 0;
 
+    // What this range holds, before a hover narrows it. Preflop that is the
+    // pass over the flops, and until one has been run it is nothing at all -
+    // so every rung shows, because there has to be a ladder to tick.
+    const holds: Map<number, number> | null = preflopMode
+      ? chrome.preflop
+        ? new Map(chrome.preflop.rows.map((row) => [row.index, row.combos]))
+        : null
+      : new Map(view.breakdown.rows.map((row) => [row.index, row.combos]));
+
     for (const [index, row] of rows) {
       const data = shown.get(index);
       // Preflop the rows stay visible before the pass has run, so there is a
       // ladder to put checkmarks on.
-      row.element.hidden = data === undefined && !preflopMode;
+      //
+      // Otherwise a rung with nothing on it goes. There is no reading to be
+      // had from "quads 0%" on a board with no pair, and the panel is long
+      // enough without the rungs that never come up - which is also what lets
+      // it name third and fourth pair without growing.
+      // A rung with nothing on it goes. There is no reading to be had from
+      // "quads 0%" on a board with no pair, and the panel is long enough
+      // without the rungs that never come up - which is also what lets it name
+      // third and fourth pair without growing.
+      //
+      // Held, not shown: hovering a statistic re-filters the panel and takes
+      // most rows to nothing, and a ladder that reshuffled itself under the
+      // pointer could not be read. So this asks what the range holds as the
+      // street filters leave it, which is what the panel is about anyway.
+      //
+      // And what the reader has acted on stays whatever it holds: hiding a
+      // row that carries a colour or a checkmark would hide the only way back
+      // to it.
+      const held = holds === null ? 1 : (holds.get(index) ?? 0);
+      const painted = (view.marks[index] ?? "empty") !== "empty";
+      const ticked = view.checkmarks[index] ?? false;
+      row.element.hidden =
+        (!preflopMode && data === undefined) || (held <= 0 && !painted && !ticked);
       const mark = preflopMode
         ? view.checkmarks[index]
           ? "check"
@@ -426,6 +636,44 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
       if (share > 0) row.element.style.setProperty("--makes", share.toFixed(3));
       else row.element.style.removeProperty("--makes");
     }
+
+    // The bands, which need something to measure against: without that there
+    // is no per-hand equity and nothing to sort by.
+    if (bandsAt !== revision()) {
+      bandsAt = revision();
+      bands = equityBuckets();
+    }
+    bandBlock.hidden = bands.length === 0;
+    for (const band of bands) {
+      const row = bandRows.get(band.key);
+      if (!row) continue;
+      row.element.classList.toggle("empty-band", band.fraction <= 0);
+      row.label.textContent = band.label;
+      row.value.textContent = `${(band.fraction * 100).toFixed(1)}%`;
+      row.bar.style.width = `${(band.fraction * 100).toFixed(1)}%`;
+      row.element.title =
+        `${band.label}: equity ${band.low} to ${band.high} per cent, ` +
+        `${formatCombos(band.combos)} combos. Press to paint them.`;
+      row.mark.className = "filter-mark mark-none";
+      row.mark.textContent = "▼";
+    }
+
+    // What the band is asking for, said in words rather than in two numbers:
+    // "0-100" is a thing a reader has to decode and "all of it" is not.
+    const { low, high } = chrome.rowBand;
+    bandRow.hidden = preflopMode;
+    bandFrom.value = String(low);
+    bandTo.value = String(high);
+    bandValue.textContent =
+      low <= 0 && high >= 100
+        ? "all of it"
+        : low <= 0
+          ? `top ${high}%`
+          : high >= 100
+            ? `bottom ${100 - low}%`
+            : `${low}\u2013${high}%`;
+    bandRow.classList.toggle("narrowed", !(low <= 0 && high >= 100));
+    bandClear.hidden = low <= 0 && high >= 100;
 
     streetRow.hidden = preflopMode;
     streetButtons.forEach((control, street) => {
@@ -561,6 +809,11 @@ function applyPainted(index: number): void {
   });
 }
 
+/** Whether the band is the whole of a row, which is what a press used to do. */
+function whole(): boolean {
+  return chrome.rowBand.low <= 0 && chrome.rowBand.high >= 100;
+}
+
 function createRow(index: number, label: string): RowElements {
   const element = document.createElement("div");
   element.className = "stat-row";
@@ -610,7 +863,15 @@ function createRow(index: number, label: string): RowElements {
         return;
       }
       const view = state();
-      engine.paintStat(index, view.marks[index] === view.colour ? "none" : view.colour);
+      const wanted = view.marks[index] === view.colour ? "none" : view.colour;
+      // Which part of the row, by equity. The whole of it is still painted as
+      // a category, so nothing about pressing a row has changed until the
+      // reader moves the band.
+      if (wanted === "none" || whole()) {
+        engine.paintStat(index, wanted);
+        return;
+      }
+      engine.paintStatPart(index, chrome.rowBand.low, chrome.rowBand.high, wanted);
     });
   };
   // Preflop there is no colour to pick up, so the sweep takes its direction from
@@ -759,6 +1020,16 @@ function snapToStep(share: number): number {
     else break;
   }
   return share < steps[0] ? share : best;
+}
+
+/** What a slice from `low` to `high` is called, as shares of the range. */
+function sliceText(low: number, high: number): string {
+  const from = Math.round(low * 100);
+  const to = Math.round(high * 100);
+  if (from <= 0 && to >= 100) return "all";
+  if (from <= 0) return `top ${to}%`;
+  if (to >= 100) return `bottom ${100 - from}%`;
+  return `${from}\u2013${to}%`;
 }
 
 /** The staircase drawn on the track, one hairline per step. */

@@ -12,6 +12,7 @@ import {
   classLabels,
   comboColour,
   comboStats,
+  colourByCombo,
   colourSlot,
   describeCombo,
   equityByCombo,
@@ -24,6 +25,8 @@ import {
   palette,
   preflopEquityMissing,
   preflopEquityReady,
+  preflopTiers,
+  rankByCombo,
   revision,
   repaint,
   setVersusSeat,
@@ -38,12 +41,14 @@ type Tab = typeof chrome.output;
 /**
  * The views, and which of them are measured against another range.
  *
- * Three of the five ask the question the opponent control answers. The pie is
- * about colours and the overlap about statistics, and a control that changed
- * nothing on them would be a control that taught the reader it does nothing.
+ * Four of the five ask the question the opponent control answers. The pie does
+ * because its wedges are drawn hand by hand, strongest first, and "strongest"
+ * is strongest against somebody. The overlap is about statistics alone, and a
+ * control that changed nothing on it would be a control that taught the reader
+ * it does nothing.
  */
 const TABS: Array<[Tab, string, string, boolean, boolean]> = [
-  ["groups", "Groups", "How much of the range sits in each colour", false, true],
+  ["groups", "Groups", "How much of the range sits in each colour", true, true],
   ["overlap", "Overlap", "How often each statistic comes with each other one", false, false],
   ["eq-matrix", "Eq. matrix", "Equity of every hand in the range", true, true],
   ["eq-graph", "Eq. graph", "The range's equity, strongest hand first", true, true],
@@ -323,8 +328,13 @@ function overlapView(): Node[] {
       // this; here the cell you are already reading is the button.
       if (value > 0) {
         cell.classList.add("actionable");
+        // The statistics themselves, not where they sit in this table. The two
+        // were the same number until the ladder stopped being numbered in the
+        // order it is shown in, and then this painted whatever happened to be
+        // numbered where these two were sitting.
+        const [first, second] = [stats[row], stats[column]];
         cell.addEventListener("click", () =>
-          mutate((engine) => engine.paintIntersection(row, column, state().colour)),
+          mutate((engine) => engine.paintIntersection(first, second, state().colour)),
         );
       }
       line.append(cell);
@@ -444,6 +454,26 @@ interface Point {
   tie: number;
 }
 
+/**
+ * Orders hands strongest first, and settles ties by the hand itself.
+ *
+ * Equity against one opponent runs out of things to say long before the hands
+ * do: against a set of tens every flush wins exactly as often, so a queen-high
+ * flush and a jack-high one come back with the same number. They are not the
+ * same hand, and a list that put the jack above the queen looked like it had
+ * got the poker wrong. The board settles it - the better five cards go first -
+ * and before the flop, where there is no board, the ranks are empty and the
+ * order is whatever the equity said.
+ */
+function strongestFirst<T extends { combo: number; equity: number }>(hands: T[]): T[] {
+  const ranks = rankByCombo();
+  hands.sort(
+    (a, b) =>
+      b.equity - a.equity || (ranks[b.combo] ?? 0) - (ranks[a.combo] ?? 0) || a.combo - b.combo,
+  );
+  return hands;
+}
+
 /** The combos of a range on this board, strongest first. */
 function curveOf(data: {
   equity: Float32Array;
@@ -463,8 +493,7 @@ function curveOf(data: {
       });
     }
   }
-  points.sort((a, b) => b.equity - a.equity);
-  return points;
+  return strongestFirst(points);
 }
 
 function equityGraphView(): Node[] {
@@ -613,16 +642,29 @@ function equityGraphView(): Node[] {
       `seat-${view.active}`,
       `${seats[view.active] ?? "This range"} · ${(average * 100).toFixed(2)}%`,
       view.active,
+      "Each hand of this range against the whole of the other one.",
     ),
   );
   if (theirs.length > 0) {
     const otherTotal = theirs.reduce((sum, p) => sum + p.weight, 0);
     const otherAverage = theirs.reduce((sum, p) => sum + p.equity * p.weight, 0) / otherTotal;
+    // The two curves are drawn on one axis and do not answer one question.
+    // Each is a range's hands against the *other* whole range, so the pair of
+    // averages adds up to a hundred - and a side holding one hand is one flat
+    // line, sitting where that hand stands against everything this range
+    // holds. Which is not a bar this range's hands have to clear: a flush that
+    // beats a set three times in four still comes in under a line drawn at the
+    // set's equity against a range that is mostly air. Said here, because the
+    // graph draws it and cannot say it.
+    const single = theirs.length === 1;
     legend.append(
       key(
         other === null ? "field" : `seat-${other}`,
         `${other === null ? "The field" : (seats[other] ?? "Opponent")} · ${(otherAverage * 100).toFixed(2)}%`,
         other ?? undefined,
+        single
+          ? `${comboName(theirs[0].combo)} against the whole of this range. One hand is one flat line — it says how that hand does against everything here, not how much a hand of this range needs to beat it.`
+          : "Each of their hands against the whole of this range. The two averages add up to 100%.",
       ),
     );
   }
@@ -724,10 +766,11 @@ function wash(element: HTMLElement, colours: string[]): void {
 }
 
 /** One swatch and label in the graph's legend. */
-function key(kind: string, label: string, seat?: number): HTMLElement {
+function key(kind: string, label: string, seat?: number, hint?: string): HTMLElement {
   const item = document.createElement("span");
   item.className = `eq-key key-${kind}`;
   if (seat !== undefined) item.style.setProperty("--seat", `var(--seat-${seat})`);
+  if (hint) item.title = hint;
   item.textContent = label;
   return item;
 }
@@ -753,6 +796,7 @@ function groupsView(): Node[] {
   if (total <= 0) return [note("Nothing in the range to group.")];
 
   const names = ["unpainted", ...palette()];
+  const grains = paintedGrains(shares.length);
   const slices: Slice[] = shares
     .map((weight, colour) => ({ colour, weight, share: weight / total }))
     .filter((slice) => slice.weight > 0)
@@ -762,11 +806,14 @@ function groupsView(): Node[] {
       share: slice.share,
       value: chrome.showCombos ? slice.weight.toFixed(1) : `${(slice.share * 100).toFixed(2)}%`,
       title: `${names[slice.colour]}: ${(slice.share * 100).toFixed(2)}%`,
+      grains: grains?.[slice.colour],
     }));
 
   const painted = total - (shares[0] ?? 0);
+  const drawn = grains ? grainyPie(slices) : null;
   return [
-    pie(slices),
+    drawn ? drawn.svg : pie(slices),
+    ...(drawn ? [drawn.readout] : []),
     pieLegend(slices),
     note(
       view.filtersEnabled
@@ -785,6 +832,94 @@ interface Slice {
   value: string;
   /** What the wedge and its key say under the pointer. */
   title: string;
+  /** The hands the wedge is made of, strongest first. Empty when unknown. */
+  grains?: Grain[];
+}
+
+/** One hand inside a wedge: how much of it is here, and what it is worth. */
+interface Grain {
+  combo: number;
+  weight: number;
+  equity: number;
+}
+
+/** How finely the gradient is drawn: past this, two neighbours are one colour. */
+const SHADES = 256;
+
+/** Where the hands stop and the band naming their group begins. */
+const INNER = 0.84;
+
+/**
+ * The hands behind each colour, strongest first, or `null`.
+ *
+ * `null` is the honest answer whenever there is nothing to sort them by -
+ * nobody to measure against, or no answer worked out yet - and the pie goes
+ * back to being the flat wedges it always was.
+ */
+function paintedGrains(count: number): Grain[][] | null {
+  const data = equityByCombo();
+  if (!data) return null;
+  const slots = colourByCombo();
+  const groups: Grain[][] = Array.from({ length: count }, () => []);
+  for (let combo = 0; combo < data.equity.length; combo += 1) {
+    const weight = data.weight[combo];
+    if (weight <= 0 || data.equity[combo] < 0) continue;
+    groups[slots[combo] ?? 0]?.push({ combo, weight, equity: data.equity[combo] });
+  }
+  return sorted(groups);
+}
+
+/**
+ * The hands behind each tier of a pass over the flops, strongest first.
+ *
+ * A hand is not in one tier here: aces are an overpair on most flops and a set
+ * on some, so the same hand is in several wedges at the weight it carries in
+ * each. That is what the pass counted, and it is what makes the wedge readable
+ * - "which of my hands make this, and what are they worth".
+ */
+function tierGrains(count: number): Grain[][] | null {
+  const data = equityByCombo();
+  const tiers = preflopTiers();
+  if (!data || tiers.length === 0) return null;
+  const groups: Grain[][] = Array.from({ length: count }, () => []);
+  for (let combo = 0; combo < data.equity.length; combo += 1) {
+    if (data.equity[combo] < 0) continue;
+    for (let tier = 0; tier < count; tier += 1) {
+      const weight = tiers[combo * count + tier] ?? 0;
+      if (weight > 0) groups[tier].push({ combo, weight, equity: data.equity[combo] });
+    }
+  }
+  return sorted(groups);
+}
+
+/** Strongest hand first, which is the order every wedge is drawn in. */
+function sorted(groups: Grain[][]): Grain[][] {
+  for (const grains of groups) strongestFirst(grains);
+  return groups;
+}
+
+/** The path of one wedge, as a share of the circle from `from` to `to`. */
+function wedge(from: number, to: number, radius = 1): string {
+  const a = from * Math.PI * 2 - Math.PI / 2;
+  const b = to * Math.PI * 2 - Math.PI / 2;
+  const large = b - a > Math.PI ? 1 : 0;
+  const r = radius.toFixed(4);
+  return (
+    `M 0 0 L ${(Math.cos(a) * radius).toFixed(5)} ${(Math.sin(a) * radius).toFixed(5)} ` +
+    `A ${r} ${r} 0 ${large} 1 ${(Math.cos(b) * radius).toFixed(5)} ${(Math.sin(b) * radius).toFixed(5)} Z`
+  );
+}
+
+/** The arc alone, for the band that names a group. */
+function arc(from: number, to: number, radius: number): string {
+  const a = from * Math.PI * 2 - Math.PI / 2;
+  const b = to * Math.PI * 2 - Math.PI / 2;
+  const large = b - a > Math.PI ? 1 : 0;
+  const r = radius.toFixed(4);
+  return (
+    `M ${(Math.cos(a) * radius).toFixed(5)} ${(Math.sin(a) * radius).toFixed(5)} ` +
+    `A ${r} ${r} 0 ${large} 1 ${(Math.cos(b) * radius).toFixed(5)} ${(Math.sin(b) * radius).toFixed(5)}`
+  );
 }
 
 function pie(slices: Slice[]): SVGSVGElement {
@@ -806,26 +941,192 @@ function pie(slices: Slice[]): SVGSVGElement {
     return svg;
   }
 
-  let angle = -Math.PI / 2;
+  let at = 0;
   for (const slice of slices) {
-    const sweep = slice.share * Math.PI * 2;
-    const end = angle + sweep;
-    const large = sweep > Math.PI ? 1 : 0;
     const path = document.createElementNS(ns, "path");
-    path.setAttribute(
-      "d",
-      `M 0 0 L ${Math.cos(angle).toFixed(5)} ${Math.sin(angle).toFixed(5)} ` +
-        `A 1 1 0 ${large} 1 ${Math.cos(end).toFixed(5)} ${Math.sin(end).toFixed(5)} Z`,
-    );
+    path.setAttribute("d", wedge(at, at + slice.share));
     path.setAttribute("class", "slice");
     path.style.setProperty("--mark", slice.mark);
     const label = document.createElementNS(ns, "title");
     label.textContent = slice.title;
     path.append(label);
     svg.append(path);
-    angle = end;
+    at += slice.share;
   }
   return svg;
+}
+
+/* ----- the pie read hand by hand ------------------------------------------ */
+
+/**
+ * The same pie, drawn out of the hands it is made of.
+ *
+ * A wedge says how much of the range is in a group. It does not say what is in
+ * there, and two groups of the same size can be nothing alike: one a run of
+ * hands that are all worth about the same, the other the best and the worst of
+ * the range with nothing in between. That second one is the shape a reader
+ * most wants to see - a group that polar is usually a mistake, or a bluffing
+ * range - and a flat wedge hides it completely.
+ *
+ * So each wedge is drawn hand by hand, strongest first, in the colour the
+ * equity views already use: green ahead, red behind, mixed in proportion. A
+ * group of like hands is one even colour; a polar group runs from green to red
+ * inside a single wedge, and the place it turns over is the place the reader
+ * is looking for. Nothing is drawn on top to point at it - the colour is the
+ * thing being read.
+ *
+ * Which group a wedge is stays at the rim, as a band in the group's own
+ * colour. It is the outline of the answer rather than the answer, and keeping
+ * it out of the middle leaves the middle to say one thing only.
+ *
+ * The scale is absolute: a dark red hand is a weak hand here and on the next
+ * board too.
+ */
+function grainyPie(slices: Slice[]): { svg: SVGSVGElement; readout: HTMLElement } {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "-1.05 -1.05 2.1 2.1");
+  svg.classList.add("pie", "pie-grainy");
+
+  // Where every hand sits on the circle, so a pointer can be turned back into
+  // one. Built as the wedges are drawn, because the two have to agree.
+  const stops: number[] = [];
+  const hands: Array<{ grain: Grain; slice: Slice }> = [];
+  const whole = slices.length === 1;
+
+  let at = 0;
+  for (const slice of slices) {
+    const grains = slice.grains ?? [];
+    const held = grains.reduce((sum, grain) => sum + grain.weight, 0);
+    const group = document.createElementNS(ns, "g");
+    group.setAttribute("class", "slice-group");
+
+    if (held <= 0) {
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("d", wedge(at, at + slice.share, INNER));
+      path.setAttribute("class", "slice");
+      path.style.setProperty("--mark", slice.mark);
+      group.append(path);
+    } else {
+      // One path per shade rather than one per hand: past a certain fineness
+      // two neighbours are the same colour, and a wide range is a thousand
+      // hands. Fine enough that the joins cannot be seen - what is drawn is a
+      // gradient, not a flight of steps.
+      let runFrom = at;
+      let runShade = -1;
+      let runEquity = 0;
+      const close = (to: number) => {
+        if (to <= runFrom || runShade < 0) return;
+        const path = document.createElementNS(ns, "path");
+        path.setAttribute(
+          "d",
+          whole && to - runFrom >= 0.9999
+            ? `M 0 ${(-INNER).toFixed(4)} A ${INNER.toFixed(4)} ${INNER.toFixed(4)} 0 1 1 0 ${INNER.toFixed(4)} A ${INNER.toFixed(4)} ${INNER.toFixed(4)} 0 1 1 0 ${(-INNER).toFixed(4)} Z`
+            : wedge(runFrom, to, INNER),
+        );
+        path.setAttribute("class", "grain");
+        path.style.setProperty("--heat", runEquity.toFixed(4));
+        group.append(path);
+      };
+
+      let walked = at;
+      for (const grain of grains) {
+        const width = (grain.weight / held) * slice.share;
+        stops.push(walked);
+        hands.push({ grain, slice });
+        const shade = Math.round(Math.min(1, Math.max(0, grain.equity)) * SHADES);
+        if (shade !== runShade) {
+          close(walked);
+          runFrom = walked;
+          runShade = shade;
+          runEquity = grain.equity;
+        }
+        walked += width;
+      }
+      close(at + slice.share);
+    }
+
+    // The band at the rim, which is the one place the group's own colour is
+    // said. A gap at each end so neighbouring bands do not read as one.
+    const gap = Math.min(0.004, slice.share / 6);
+    const band = document.createElementNS(ns, "path");
+    band.setAttribute(
+      "d",
+      whole
+        ? `M 0 ${(-(INNER + 1) / 2).toFixed(4)} A ${((INNER + 1) / 2).toFixed(4)} ${((INNER + 1) / 2).toFixed(4)} 0 1 1 0 ${((INNER + 1) / 2).toFixed(4)} A ${((INNER + 1) / 2).toFixed(4)} ${((INNER + 1) / 2).toFixed(4)} 0 1 1 0 ${(-(INNER + 1) / 2).toFixed(4)} Z`
+        : arc(at + gap, at + slice.share - gap, (INNER + 1) / 2),
+    );
+    band.setAttribute("class", "slice-rim");
+    band.style.setProperty("--mark", slice.mark);
+    const label = document.createElementNS(ns, "title");
+    label.textContent = slice.title;
+    band.append(label);
+    group.append(band);
+    svg.append(group);
+    at += slice.share;
+  }
+
+  const cursor = document.createElementNS(ns, "line");
+  cursor.setAttribute("class", "pie-cursor");
+  cursor.setAttribute("x1", "0");
+  cursor.setAttribute("y1", "0");
+  cursor.setAttribute("x2", "0");
+  cursor.setAttribute("y2", String(-INNER));
+  cursor.setAttribute("visibility", "hidden");
+  svg.append(cursor);
+
+  const readout = document.createElement("p");
+  readout.className = "eq-readout pie-readout";
+  const rest = () => {
+    readout.textContent = `${hands.length} hands in ${slices.length} group${slices.length === 1 ? "" : "s"} · strongest first, coloured by equity`;
+    readout.classList.remove("live");
+  };
+  rest();
+
+  svg.addEventListener("pointermove", (event) => {
+    const box = svg.getBoundingClientRect();
+    if (box.width === 0 || hands.length === 0) return;
+    // Where the pointer is on the circle, as a share of the way round from
+    // twelve o'clock - which is where the first wedge starts.
+    const x = ((event.clientX - box.left) / box.width) * 2.1 - 1.05;
+    const y = ((event.clientY - box.top) / box.height) * 2.1 - 1.05;
+    if (Math.hypot(x, y) > 1.05) {
+      leave();
+      return;
+    }
+    let angle = Math.atan2(y, x) + Math.PI / 2;
+    if (angle < 0) angle += Math.PI * 2;
+    const share = angle / (Math.PI * 2);
+    let index = 0;
+    while (index + 1 < stops.length && stops[index + 1] <= share) index += 1;
+    const { grain, slice } = hands[index];
+    cursor.setAttribute("visibility", "visible");
+    const line = share * Math.PI * 2 - Math.PI / 2;
+    cursor.setAttribute("x2", (Math.cos(line) * INNER).toFixed(5));
+    cursor.setAttribute("y2", (Math.sin(line) * INNER).toFixed(5));
+    // The hand under the pointer here is the hand under the pointer
+    // everywhere: the matrix outlines it and the statistics light what it
+    // makes.
+    peekAt(COMBO_CLASS[grain.combo] ?? null, grain.combo);
+    const what = describeCombo(grain.combo);
+    readout.replaceChildren(
+      pips(comboName(grain.combo)),
+      document.createTextNode(
+        ` · ${slice.name}` +
+          (what.length ? ` · ${what.join(", ")}` : "") +
+          ` · ${(grain.equity * 100).toFixed(2)}%`,
+      ),
+    );
+    readout.classList.add("live");
+  });
+  const leave = () => {
+    cursor.setAttribute("visibility", "hidden");
+    peekAt(null);
+    rest();
+  };
+  svg.addEventListener("pointerleave", leave);
+
+  return { svg, readout };
 }
 
 function pieLegend(slices: Slice[]): HTMLElement {
@@ -903,8 +1204,13 @@ function preflopGroupsView(): Node[] {
   const ticks = statDefs.filter((def) => checkmarks[def.index]).map((def) => def.label);
   const slices = ticks.length > 0 ? hitSlices(pass) : ladderSlices(pass);
   const flops = pass.flops.toLocaleString();
+  // Hit and miss are not tiers: whether a hand hit depends on the flop it saw,
+  // so there is no list of hands behind either wedge to sort. The ladder does
+  // have one, and the pass counted it hand by hand.
+  const drawn = slices.some((slice) => (slice.grains?.length ?? 0) > 0) ? grainyPie(slices) : null;
   return [
-    pie(slices),
+    drawn ? drawn.svg : pie(slices),
+    ...(drawn ? [drawn.readout] : []),
     pieLegend(slices),
     note(
       ticks.length > 0
@@ -930,15 +1236,19 @@ function ladderSlices(pass: PreflopBreakdown): Slice[] {
     tiers[at].share += row.fraction;
     if (row.fraction > 0) tiers[at].rungs.push(`${row.label} ${(row.fraction * 100).toFixed(2)}%`);
   }
+  // Attached before the empty tiers are dropped: the pass counts hands by tier
+  // number, and a tier nothing reached would shift every one after it.
+  const grains = tierGrains(LADDER_TIERS.length);
   return tiers
-    .filter((tier) => tier.share > 0)
-    .map((tier) => ({
+    .map((tier, index) => ({
       mark: tier.mark,
       name: tier.name,
       share: tier.share,
       value: `${(tier.share * 100).toFixed(2)}%`,
       title: `${tier.name}: ${(tier.share * 100).toFixed(2)}% — ${tier.rungs.join(", ")}`,
-    }));
+      grains: grains?.[index],
+    }))
+    .filter((tier) => tier.share > 0);
 }
 
 /** The split the checkmarks define: hands that hit one of them, and the rest. */

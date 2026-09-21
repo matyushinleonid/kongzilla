@@ -13,10 +13,10 @@ use std::collections::HashMap;
 
 use crate::board::Board;
 use crate::breakdown::StatRow;
-use crate::cards::{CardSet, Combo};
+use crate::cards::{CardSet, Combo, NUM_COMBOS};
 use crate::flops::FlopFilter;
 use crate::range::Range;
-use crate::stats::{stat_count, BoardContext, ClassifyOptions, StatMask};
+use crate::stats::{stat_count, BoardContext, ClassifyOptions, StatBlock, StatId, StatMask, ORDER};
 
 /// A range's statistics averaged over every flop.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +31,16 @@ pub struct PreflopBreakdown {
     pub rows: Vec<StatRow>,
     /// Share of hand-flop pairs carrying at least one checkmarked statistic.
     pub hit: f64,
+    /// How much of each hand's weight landed in each tier of the made ladder,
+    /// as `combo * TIERS.len() + tier`.
+    ///
+    /// The pie next door divides the range into these four; this says which
+    /// hands are behind each division, which is what lets a wedge be read hand
+    /// by hand rather than as one block of colour. Kept out of the JSON: it is
+    /// five thousand numbers that only the pie asks for, and it asks for them
+    /// once a pass rather than once a redraw.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub tiers: Vec<f32>,
     /// Every combination of statistics the pass saw, and how much weight landed
     /// on it.
     ///
@@ -42,6 +52,42 @@ pub struct PreflopBreakdown {
     /// ticking it did.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub profile: Vec<(StatMask, f64)>,
+}
+
+/// Where the made ladder is cut for a reading of the whole range.
+///
+/// Seventeen rungs is a table rather than a pie, and half of them are slivers
+/// nobody can compare. These four are the cuts a preflop decision turns on, and
+/// each is a *run* of the ladder starting at the named rung - so a rung added
+/// between two of them falls in the tier it was added to rather than going
+/// missing.
+pub const LADDER_TIERS: [StatId; 4] = [
+    StatId::STRAIGHT_FLUSH,
+    StatId::OVERPAIR,
+    StatId::PP_BELOW_TOP_CARD,
+    StatId::ACE_HIGH,
+];
+
+/// Which tier a classified hand belongs to.
+///
+/// Exactly one rung of the made block is set on any hand - a flushdraw with no
+/// pair is no pair - so the strongest rung the mask carries is the hand it has.
+fn tier_of(mask: StatMask) -> usize {
+    let mut tier = LADDER_TIERS.len() - 1;
+    let mut at = 0;
+    for stat in ORDER {
+        if stat.def().block != StatBlock::Made {
+            break;
+        }
+        if at + 1 < LADDER_TIERS.len() && LADDER_TIERS[at + 1] == stat {
+            at += 1;
+        }
+        if mask.has(stat) {
+            tier = at;
+            break;
+        }
+    }
+    tier
 }
 
 impl PreflopBreakdown {
@@ -98,6 +144,7 @@ pub fn over_flops(
     let mut hit_weight = 0.0f64;
     let mut flops = 0u64;
     let mut profile: HashMap<StatMask, f64> = HashMap::new();
+    let mut tiers = vec![0.0f32; NUM_COMBOS * LADDER_TIERS.len()];
 
     if !hands.is_empty() {
         for flop in Board::all_flops() {
@@ -120,6 +167,8 @@ pub fn over_flops(
                 for stat in mask.iter() {
                     totals[stat.index() as usize] += weight;
                 }
+                let at = combo.index() as usize * LADDER_TIERS.len() + tier_of(mask);
+                tiers[at] += *weight as f32;
             }
         }
     }
@@ -146,6 +195,7 @@ pub fn over_flops(
         total,
         rows,
         hit: if total > 0.0 { hit_weight / total } else { 0.0 },
+        tiers,
         profile: profile.into_iter().collect(),
     }
 }
@@ -174,6 +224,69 @@ mod tests {
             .map(|row| row.fraction)
             .sum();
         assert!((made - 1.0).abs() < 1e-9, "made hands summed to {made}");
+    }
+
+    #[test]
+    fn the_tiers_say_which_hands_are_behind_them() {
+        let range = Range::parse("AA, 72o").unwrap();
+        let result = over_flops(
+            &range,
+            CardSet::EMPTY,
+            CardSet::EMPTY,
+            ClassifyOptions::default(),
+            StatMask::EMPTY,
+            FlopFilter::EVERYTHING,
+        );
+
+        // Every hand-flop pair the pass counted is in exactly one tier, so the
+        // four of them together are the whole pass.
+        let summed: f64 = result.tiers.iter().map(|weight| f64::from(*weight)).sum();
+        assert!(
+            (summed - result.total).abs() / result.total < 1e-3,
+            "tiers held {summed} of {}",
+            result.total
+        );
+
+        // And each tier holds what the rows it gathers hold. The made rows are
+        // exclusive, so a tier is the sum of its run of them.
+        let made: Vec<&StatRow> = result
+            .rows
+            .iter()
+            .filter(|row| row.block == StatBlock::Made)
+            .collect();
+        let mut by_rows = [0.0f64; LADDER_TIERS.len()];
+        let mut at = 0;
+        for row in made {
+            if at + 1 < LADDER_TIERS.len() && LADDER_TIERS[at + 1].def().key == row.key {
+                at += 1;
+            }
+            by_rows[at] += row.combos;
+        }
+        for (tier, rows) in by_rows.iter().enumerate() {
+            let held: f64 = range
+                .iter()
+                .map(|(combo, _)| {
+                    f64::from(result.tiers[combo.index() as usize * LADDER_TIERS.len() + tier])
+                })
+                .sum();
+            assert!(
+                (held - rows).abs() / result.total < 1e-3,
+                "tier {tier} held {held}, its rows {rows}"
+            );
+        }
+
+        // The hands are told apart, which is the whole point of counting them
+        // one at a time: aces are an overpair on most flops, and seven-deuce is
+        // no pair on most flops.
+        let share = |combo: Combo, tier: usize| {
+            let at = combo.index() as usize * LADDER_TIERS.len();
+            let held: f32 = result.tiers[at..at + LADDER_TIERS.len()].iter().sum();
+            f64::from(result.tiers[at + tier] / held)
+        };
+        let aces = Combo::parse("AhAs").expect("a hand");
+        let rags = Combo::parse("7h2s").expect("a hand");
+        assert!(share(aces, 1) > 0.7, "aces: {}", share(aces, 1));
+        assert!(share(rags, 3) > 0.6, "seven-deuce: {}", share(rags, 3));
     }
 
     #[test]
@@ -210,7 +323,7 @@ mod tests {
             FlopFilter::EVERYTHING,
         );
         let paired = result.row("top-pair").unwrap().fraction
-            + result.row("middle-pair").unwrap().fraction
+            + result.row("second-pair").unwrap().fraction
             + result.row("bottom-pair").unwrap().fraction
             + result.row("two-pair").unwrap().fraction
             + result.row("trips").unwrap().fraction;
