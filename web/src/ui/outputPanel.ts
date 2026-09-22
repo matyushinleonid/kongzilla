@@ -157,11 +157,11 @@ export function createOutputPanel(): { element: HTMLElement; render: () => void 
     // a pass that was already standing can gain one without anything else here
     // moving - and the views would have gone on showing the note that asked
     // for it.
-    const built = `${chrome.output}/${revision()}/${chrome.showCombos}/${chrome.overlapAxes}/${
+    const from = `${chrome.output}/${revision()}/${chrome.showCombos}/${chrome.overlapAxes}/${
       chrome.preflop === null ? "none" : "pass"
     }/${chrome.preflopRunning}/${preflopEquityReady()}`;
-    if (built !== lastBuilt) {
-      lastBuilt = built;
+    if (built.get(body) !== from) {
+      built.set(body, from);
       body.replaceChildren(...view());
     }
     markPeek(body);
@@ -170,8 +170,14 @@ export function createOutputPanel(): { element: HTMLElement; render: () => void 
   return { element: panel, render };
 }
 
-/** What the last render built from, so an unchanged view is left alone. */
-let lastBuilt = "";
+/**
+ * What each panel was last built from, so an unchanged view is left alone.
+ *
+ * Per panel rather than per module: two of them on the page and the second
+ * would be told its view was already drawn, when what had been drawn was the
+ * first one's.
+ */
+const built = new WeakMap<HTMLElement, string>();
 
 /**
  * Marks the hand being pointed at, without rebuilding anything.

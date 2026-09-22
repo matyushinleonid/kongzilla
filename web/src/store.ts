@@ -123,7 +123,16 @@ let view: View;
 let hoverPanel: Breakdown | null = null;
 let comparePanel: Breakdown | null = null;
 
-export const chrome: Chrome = {
+/**
+ * What the chrome is on a fresh visit.
+ *
+ * Kept as a value rather than written straight into `chrome`, because starting
+ * over is a thing that happens twice: once when the page loads, and once per
+ * end-to-end test, which opens a new session without reloading the page. The
+ * tests used to keep their own list of what to put back, and a new piece of
+ * chrome that nobody added to it leaked from one test into the next.
+ */
+const FRESH: Chrome = {
   boardCards: [],
   visible: 0,
   brush: 1,
@@ -157,6 +166,19 @@ export const chrome: Chrome = {
   // first load. See ui/workspace.ts.
   columns: { range: 620, board: 260, stats: 380, output: 420 },
 };
+
+export const chrome: Chrome = structuredClone(FRESH);
+
+/**
+ * Puts the chrome back to how a fresh visit finds it.
+ *
+ * Not the theme, which is the reader's and outlives any one session, and not
+ * the column widths, which are read from storage by the workspace.
+ */
+export function resetChrome(): void {
+  const { theme, columns } = chrome;
+  Object.assign(chrome, structuredClone(FRESH), { theme, columns });
+}
 
 export let statDefs: StatDef[] = [];
 export let blockLabels = new Map<string, string>();

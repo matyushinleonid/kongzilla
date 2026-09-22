@@ -16,43 +16,26 @@
 
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
+import { createApp, type App as AppUnderTest } from "../src/app";
 import {
   boot,
   chrome,
   classLabels,
   mutate,
+  resetChrome,
   restore,
   snapshot,
   state,
   statDefs,
 } from "../src/store";
-import { createBoardPanel } from "../src/ui/boardPanel";
-import { dismissOne, installDismiss } from "../src/ui/dismiss";
-import { createFlopsPanel } from "../src/ui/flopsPanel";
-import { createHotkeySheet, installHotkeys } from "../src/ui/hotkeys";
-import { createMenuBar } from "../src/ui/menubar";
-import { createOutputPanel } from "../src/ui/outputPanel";
-import { createRangePanel } from "../src/ui/rangePanel";
-import { createStatsPanel } from "../src/ui/statsPanel";
-import { createTopStrip } from "../src/ui/topStrip";
 import { loadColumns } from "../src/ui/workspace";
 import { wasmBytes } from "./harness";
 
 /** Everything on screen, plus the ways a journey drives it. */
-interface App {
-  render: () => void;
-  menubar: HTMLElement;
-  strip: HTMLElement;
-  range: HTMLElement;
-  board: HTMLElement;
-  stats: HTMLElement;
-  output: HTMLElement;
-  flops: HTMLElement;
-  sheet: HTMLElement;
+interface App extends AppUnderTest {
   press: (key: string, init?: KeyboardEventInit) => void;
-  /** How many times the key nobody is told about has been pressed. */
-  mascotShown: () => number;
-  teardown: () => void;
+  /** Whether the one nobody is told about is on screen. */
+  mascotShown: () => boolean;
 }
 
 let bytes: Buffer;
@@ -70,33 +53,14 @@ afterEach(() => {
 /**
  * A new session with everything wired, as the page does it.
  *
- * `boot` builds a fresh engine, so each journey starts where a reader starting
- * the app starts: the button opening range, no board, nothing painted.
+ * Literally as the page does it: `createApp` is what the entry point calls, so
+ * a journey drives the assembly a reader gets rather than a copy of it kept
+ * here. `boot` builds a fresh engine, so each one starts where a reader
+ * starting the app starts: the button opening range, no board, nothing painted.
  */
 async function open(): Promise<App> {
   // Anything a previous journey left in the chrome is not part of a fresh start.
-  Object.assign(chrome, {
-    hovered: null,
-    editing: null,
-    suitCell: null,
-    suitPeek: null,
-    peekClass: null,
-    peekCombo: null,
-    output: "groups",
-    showCombos: false,
-    brush: 1,
-    continueShare: 1,
-    cut: null,
-    flopsOpen: true,
-    dealtBucket: null,
-    preflop: null,
-    preflopRunning: false,
-    rowBand: { low: 0, high: 100 },
-    libraryOpener: "",
-    actions: {},
-    boardCards: [],
-    visible: 0,
-  });
+  resetChrome();
   // The app writes the session into the address as you work, and `boot` reads
   // it back. A fresh visit has no address to read, so neither does a fresh
   // journey - otherwise each one starts inside the last one.
@@ -104,52 +68,19 @@ async function open(): Promise<App> {
   await boot(bytes);
   loadColumns();
 
-  const menubar = createMenuBar();
-  const strip = createTopStrip();
-  const range = createRangePanel();
-  const board = createBoardPanel();
-  const stats = createStatsPanel();
-  const output = createOutputPanel();
-  const flops = createFlopsPanel();
-  const sheet = createHotkeySheet();
-  const panels = [menubar, strip, range, board, stats, output, flops];
-  document.body.replaceChildren(...panels.map((panel) => panel.element), sheet.element);
-
-  const render = () => panels.forEach((panel) => panel.render());
-  let mascotShown = 0;
-  const stopDismiss = installDismiss();
-  const uninstall = installHotkeys({
-    randomBoard: board.randomBoard,
-    stepStreet: board.stepStreet,
-    toggleSheet: sheet.toggle,
-    // The app's own ladder, not a copy of it: a copy is a thing that drifts.
-    escape: () => dismissOne(sheet.close),
-    say: () => {},
-    actions: menubar.actions,
-    mascot: () => {
-      mascotShown += 1;
-    },
-  });
-  render();
+  const root = document.createElement("div");
+  document.body.replaceChildren(root);
+  const built = createApp(root);
 
   app = {
-    render,
-    menubar: menubar.element,
-    strip: strip.element,
-    range: range.element,
-    board: board.element,
-    stats: stats.element,
-    output: output.element,
-    flops: flops.element,
-    sheet: sheet.element,
+    ...built,
     press: (key, init = {}) => {
       window.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true, ...init }));
-      render();
+      built.render();
     },
-    mascotShown: () => mascotShown,
+    mascotShown: () => !built.mascot.hidden,
     teardown: () => {
-      uninstall();
-      stopDismiss();
+      built.teardown();
       document.body.replaceChildren();
     },
   };
@@ -1377,6 +1308,38 @@ describe("the range read by what its hands are worth", () => {
     app.render();
     return app;
   };
+
+  test("the pass over the flops fills them in where the reader is standing", async () => {
+    const app = await open();
+    type(app, "22+, A2s+, KTo+");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "88+, ATs+, AQo+");
+    seats2(app)[0].click();
+    app.render();
+    expect(state().board).toBe("");
+
+    // Before the pass there is no per-hand equity, so there is nothing to band.
+    const block = app.stats.querySelector<HTMLElement>(".block-bands")!;
+    expect(block.hidden).toBe(true);
+
+    const run = Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".btn")).find((button) =>
+      button.textContent?.startsWith("Calculate over"),
+    )!;
+    run.click();
+    await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
+    app.render();
+
+    // And afterwards they are on screen, without having to leave the seat and
+    // come back: the pass changes nothing about the session, so nothing else
+    // will happen to prompt a fresh reading.
+    expect(block.hidden).toBe(false);
+    const shares = ["best", "good", "weak", "trash"].map((key) =>
+      Number(band(app, key).querySelector(".stat-value")!.textContent!.replace("%", "")),
+    );
+    expect(shares.reduce((sum, share) => sum + share, 0)).toBeCloseTo(100, 0);
+    app.teardown();
+  }, 60000);
 
   test("four bands, adding up to the whole range", async () => {
     const app = await table();
@@ -4508,17 +4471,17 @@ describe("one thing on top of another", () => {
 describe("the keyboard", () => {
   test("one key does nothing anyone needs, and says so in the sheet", async () => {
     const app = await open();
-    expect(app.mascotShown()).toBe(0);
+    expect(app.mascotShown()).toBe(false);
 
     app.press("a");
-    expect(app.mascotShown()).toBe(1);
+    expect(app.mascotShown()).toBe(true);
 
     // Typing into the range box is typing, not pressing keys at the app: an
     // easter egg that fires while someone spells out A2s+ is a bug.
     const notation = app.range.querySelector<HTMLTextAreaElement>(".notation")!;
     notation.dispatchEvent(new window.Event("focus"));
     notation.dispatchEvent(new window.KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    expect(app.mascotShown()).toBe(1);
+    expect(app.mascotShown()).toBe(true);
     notation.dispatchEvent(new window.Event("blur"));
 
     // It is in the sheet like everything else, under a heading of its own,
@@ -4554,9 +4517,9 @@ describe("the keyboard", () => {
     // And a Latin layout that moves the letters about is still read by its
     // letters: on AZERTY the cap marked A is where Q sits, and it means A.
     app.press("a", { code: "KeyQ" });
-    expect(app.mascotShown()).toBe(1);
+    expect(app.mascotShown()).toBe(true);
     app.press("q", { code: "KeyA" });
-    expect(app.mascotShown(), "the cap marked Q is not the cap marked A").toBe(1);
+    expect(app.mascotShown(), "the cap marked Q is not the cap marked A").toBe(true);
   }, 30000);
 
   test("carries a whole session without touching the mouse", async () => {
@@ -4601,6 +4564,86 @@ describe("the keyboard", () => {
     app.press("Escape");
     expect(app.sheet.hidden).toBe(true);
   });
+});
+
+describe("being told when something is wrong", () => {
+  test("a range that is not a range is refused, and said so", async () => {
+    const app = await open();
+    const was = state().players[state().active].notation;
+    expect(app.toast.hidden).toBe(true);
+
+    // The box takes anything; the engine takes only a range. What it does not
+    // take has to come back as a sentence rather than as nothing happening.
+    const notation = app.range.querySelector<HTMLTextAreaElement>(".notation")!;
+    notation.dispatchEvent(new window.Event("focus"));
+    notation.value = "AKz, 99";
+    notation.dispatchEvent(new window.Event("blur"));
+    app.render();
+
+    expect(app.toast.hidden, "a refusal nobody sees is a refusal nobody understands").toBe(false);
+    expect(app.toast.textContent).toMatch(/AKz|range|parse/i);
+    // And the range it could not read is not the range it throws away.
+    expect(state().players[state().active].notation).toBe(was);
+    expect(app.range.querySelectorAll(".cell")).toHaveLength(169);
+
+    // The message goes by itself; it is not a dialog to be dismissed.
+    await vi.waitFor(() => expect(app.toast.hidden).toBe(true), { timeout: 6000 });
+
+    // A board that is not a board is refused the same way.
+    mutate((engine) => engine.setBoard("Zz 7h 2c"));
+    app.render();
+    expect(app.toast.hidden).toBe(false);
+    expect(state().board).toBe("");
+    app.teardown();
+  }, 30000);
+
+  test("a key that did something says what, in the same place", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    // The clipboard is the browser's, and jsdom has none worth the name.
+    const written: string[] = [];
+    Object.defineProperty(window.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: (text: string) => (written.push(text), Promise.resolve()) },
+    });
+
+    app.press("t");
+    await vi.waitFor(() => expect(written).toHaveLength(1));
+    expect(app.toast.hidden).toBe(false);
+    expect(app.toast.textContent).toMatch(/copied/i);
+    app.teardown();
+  }, 30000);
+});
+
+describe("the one nobody is told about", () => {
+  test("arrives on a key, and is not fetched until she is asked for", async () => {
+    const app = await open();
+    // The picture is a quarter of a megabyte, and everybody pays for the
+    // markup while nobody should pay for the picture until they press the key.
+    expect(app.mascot.querySelector("img"), "not built before the key").toBeNull();
+    expect(app.mascot.hidden).toBe(true);
+
+    app.press("a");
+    expect(app.mascot.hidden).toBe(false);
+    expect(app.mascot.querySelector("img")).not.toBeNull();
+
+    // A press anywhere sends her away - and she fades, so she is still in the
+    // tree for a moment after.
+    finger(app.mascot, "pointerdown");
+    await vi.waitFor(() => expect(app.mascot.hidden).toBe(true), { timeout: 3000 });
+
+    // Asking again costs nothing: it is the same picture, not a second one.
+    app.press("a");
+    expect(app.mascot.hidden).toBe(false);
+    expect(app.mascot.querySelectorAll("img")).toHaveLength(1);
+
+    // Escape closes her like everything else the app puts over the page.
+    app.press("Escape");
+    await vi.waitFor(() => expect(app.mascot.hidden).toBe(true), { timeout: 3000 });
+    app.teardown();
+  }, 30000);
 });
 
 describe("sharing a session", () => {

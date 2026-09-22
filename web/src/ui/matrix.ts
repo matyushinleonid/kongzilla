@@ -35,11 +35,6 @@ let painting: number | null = null;
 const SUITS = ["s", "h", "d", "c"] as const;
 
 export function createMatrix(): HTMLElement {
-  // A new grid wears nothing and has been drawn from nothing: what the old one
-  // was showing is no guide to what this one needs.
-  drawnFrom = "";
-  wearing = { open: -1, peeking: -1, peek: -1 };
-
   const frame = document.createElement("div");
   frame.className = "matrix-frame";
 
@@ -138,13 +133,30 @@ function apply(index: number): void {
  * That is fifteen hundred writes to the page for a mouse moving a centimetre,
  * and it is what a hover felt like.
  */
-let drawnFrom = "";
-let wearing = { open: -1, peeking: -1, peek: -1 };
+/*
+ * Kept per matrix rather than per module.
+ *
+ * One of these on the page is the ordinary case, and a cache in a module
+ * variable is right up until there are two - then the second one asks "have I
+ * drawn this?", is told yes about the first one's cells, and draws nothing. Its
+ * own cells stay as they were built: a grid of a hundred and sixty-nine blanks.
+ */
+const drawn = new WeakMap<HTMLElement, { from: string; wearing: Wearing }>();
+
+/** Which cell is wearing each of the classes that follow the pointer. */
+interface Wearing {
+  open: number;
+  peeking: number;
+  peek: number;
+}
 
 export function renderMatrix(frame: HTMLElement): void {
   const grid = frame.querySelector<HTMLElement>(".matrix")!;
   const view = state();
   const cells = grid.children;
+  const before = drawn.get(frame) ?? { from: "", wearing: { open: -1, peeking: -1, peek: -1 } };
+  const wearing = before.wearing;
+  drawn.set(frame, before);
 
   // The classes that follow the pointer, moved from the cells that had them to
   // the cells that want them and nowhere else.
@@ -176,8 +188,8 @@ export function renderMatrix(frame: HTMLElement): void {
   // Everything else is about the range and the board, so it is redrawn when
   // those move and not when the pointer does.
   const from = `${revision()}/${chrome.hovered}/${view.filtersEnabled}/${chrome.visible}`;
-  if (from === drawnFrom) return;
-  drawnFrom = from;
+  if (from === before.from) return;
+  before.from = from;
 
   // Hovering a statistic is a question being asked right now, so it wins the
   // glow; the cut keeps its own marker underneath either way.

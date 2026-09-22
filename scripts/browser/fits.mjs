@@ -20,19 +20,29 @@ const SCREENS = [
   { name: "1080p", width: 1920, height: 950 },
 ];
 
+/**
+ * Shorter windows, where the promise is weaker but still worth keeping.
+ *
+ * Below a certain height nothing can fit: the matrix has a smallest readable
+ * size and the controls under it take what they take, so the range panel is
+ * taller than the window and the page has to scroll. What must not happen is
+ * everything *else* scrolling too - the statistics panel has a list it can
+ * give up, and the bargain is that it does. Getting this wrong turned twenty
+ * pixels of unavoidable scrolling into three hundred.
+ */
+const SHORT = [
+  { name: "a short laptop", width: 1512, height: 760 },
+  { name: "a shorter one", width: 1440, height: 700 },
+];
+
+/** Rounding, and the pixel a border costs. */
+const SLACK = 2;
+
 await drive("Fitting the screen", async ({ browser, report, url }) => {
   for (const screen of SCREENS) {
     const page = await open(browser, url, { width: screen.width, height: screen.height });
 
-    const measure = async (what) => {
-      const over = await page.evaluate(() => ({
-        down: document.documentElement.scrollHeight - window.innerHeight,
-        across: document.documentElement.scrollWidth - window.innerWidth,
-      }));
-      if (over.down > 0 || over.across > 0) {
-        report(`${screen.name}: ${what} overflows by ${over.down}px down, ${over.across}px across`);
-      }
-    };
+    const measure = measuring(page, report, screen.name, true);
 
     await measure("a fresh visit");
 
@@ -70,4 +80,77 @@ await drive("Fitting the screen", async ({ browser, report, url }) => {
 
     await page.close();
   }
+
+  // The short ones, where what is checked is that nothing scrolls that did not
+  // have to.
+  for (const screen of SHORT) {
+    const page = await open(browser, url, { width: screen.width, height: screen.height });
+    const measure = measuring(page, report, screen.name, false);
+    await measure("a fresh visit");
+    await dealFlop(page);
+    await settle(page);
+    await measure("a flop dealt");
+    await page.evaluate(() => document.querySelector(".panel-stats .panel-head .btn")?.click());
+    await settle(page, 150);
+    await measure("the statistics panel opened up");
+    await page.close();
+  }
+
+  // And a window that changes size under a session already running, which is
+  // what happens when a reader splits their screen or rotates a tablet. The
+  // fit is worked out from measurements, so it has to be worked out again -
+  // and the pass that does it must land in one go rather than creep into place
+  // over the next few repaints.
+  const page = await open(browser, url, { width: 1920, height: 950 });
+  await dealFlop(page);
+  await settle(page);
+  for (const [width, height, promise] of [
+    [1512, 820, true],
+    [1512, 760, false],
+    [1440, 700, false],
+    [1920, 950, true],
+  ]) {
+    await page.setViewport({ width, height });
+    await settle(page, 200);
+    const measure = measuring(page, report, `resized to ${width}x${height}`, promise);
+    await measure("the layout");
+  }
+  await page.close();
 });
+
+/**
+ * How much of the page hangs off the screen, and how much of that was forced.
+ *
+ * `forced` is the tallest panel that has no list to give up. Where that is
+ * already past the bottom the page scrolls by the difference whatever else
+ * happens, so that much is not a finding - anything beyond it is.
+ */
+function measuring(page, report, where, mustFit) {
+  return async (what) => {
+    const over = await page.evaluate(() => {
+      const workspace = document.querySelector(".workspace");
+      const top = workspace.getBoundingClientRect().top + window.scrollY;
+      const below = Number.parseFloat(getComputedStyle(workspace).paddingBottom) || 0;
+      const room = window.innerHeight - top - below;
+      const forced = [...document.querySelectorAll(".panel-range, .panel-output")].reduce(
+        (tallest, panel) => Math.max(tallest, panel.getBoundingClientRect().height),
+        0,
+      );
+      return {
+        down: document.documentElement.scrollHeight - window.innerHeight,
+        across: document.documentElement.scrollWidth - window.innerWidth,
+        forced: Math.max(0, Math.ceil(forced - room)),
+      };
+    });
+    if (over.across > 0) {
+      report(`${where}: ${what} is ${over.across}px wider than the screen`);
+    }
+    if (mustFit && over.down > 0) {
+      report(`${where}: ${what} overflows by ${over.down}px down`);
+    } else if (over.down > over.forced + SLACK) {
+      report(
+        `${where}: ${what} scrolls ${over.down}px, and only ${over.forced}px of that is a panel that cannot shrink`,
+      );
+    }
+  };
+}

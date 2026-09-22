@@ -35,6 +35,7 @@ import {
   runPreflop,
   runPreflopIfCheap,
   preflopEquityMissing,
+  preflopEquityReady,
   preflopIsCheap,
   setCompareSeat,
   setCut,
@@ -463,7 +464,7 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
 
   /** The bands, and the session they were worked out for. */
   let bands: EquityBucket[] = [];
-  let bandsAt = -1;
+  let bandsAt = "";
 
   const render = () => {
     const view = state();
@@ -639,8 +640,17 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
 
     // The bands, which need something to measure against: without that there
     // is no per-hand equity and nothing to sort by.
-    if (bandsAt !== revision()) {
-      bandsAt = revision();
+    //
+    // Two things move them, not one. The range moving is the obvious one; the
+    // other is a pass over the flops finishing, which is what works out
+    // per-hand equity before there is a board - and that changes nothing about
+    // the session, so the revision does not move with it. Watching the
+    // revision alone left the block empty until something else happened to
+    // bump it, which meant the reader saw it fill in only when they changed
+    // seats and came back.
+    const bandsKey = `${revision()}/${preflopEquityReady()}`;
+    if (bandsAt !== bandsKey) {
+      bandsAt = bandsKey;
       bands = equityBuckets();
     }
     bandBlock.hidden = bands.length === 0;

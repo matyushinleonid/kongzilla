@@ -4,5 +4,6 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["test", "wasm", "vite.config.ts"]
+  "//include": "The asset declarations come along because the tests now drive the real app, and it imports a picture.",
+  "include": ["test", "wasm", "vite.config.ts", "src/assets.d.ts"]
 }
