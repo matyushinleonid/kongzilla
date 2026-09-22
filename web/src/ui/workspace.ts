@@ -64,34 +64,43 @@ export function loadColumns(): void {
   if (!restored) fitColumns();
 }
 
-/** Scales the columns down together until they fit the window. */
-export function fitColumns(): void {
-  if (typeof window === "undefined") return;
-  if (window.innerWidth <= STACKS_BELOW) return;
-  const room = window.innerWidth - CHROME;
-  const keys = Object.keys(chrome.columns) as Array<keyof typeof chrome.columns>;
-  const wanted = keys.reduce((sum, key) => sum + chrome.columns[key], 0);
-  if (!Number.isFinite(room) || room <= 0 || wanted <= room) return;
+/**
+ * The widths these columns can actually wear in `room` pixels.
+ *
+ * Pure, and given the widths rather than reading them: the same rule answers
+ * two questions. On a first visit it decides what to save, and on every draw it
+ * decides what to wear - and those must not be the same number, or a reader who
+ * narrowed their window once would find their columns narrowed for good.
+ */
+function scaleToFit(widths: typeof chrome.columns, room: number): typeof chrome.columns {
+  const keys = Object.keys(widths) as Array<keyof typeof chrome.columns>;
+  const out = { ...widths };
+  const wanted = keys.reduce((sum, key) => sum + out[key], 0);
+  if (!Number.isFinite(room) || room <= 0 || wanted <= room) return out;
 
   // Take the shortfall out of the columns in proportion to how much slack each
   // has above its floor, so the matrix gives up the most and the board the least.
-  const slack = keys.reduce((sum, key) => sum + (chrome.columns[key] - FLOORS[key]), 0);
-  const over = wanted - room;
+  const slack = keys.reduce((sum, key) => sum + (out[key] - FLOORS[key]), 0);
   if (slack <= 0) {
-    for (const key of keys) chrome.columns[key] = FLOORS[key];
-    return;
+    for (const key of keys) out[key] = FLOORS[key];
+    return out;
   }
-  const share = Math.min(1, over / slack);
+  const share = Math.min(1, (wanted - room) / slack);
   for (const key of keys) {
-    const give = (chrome.columns[key] - FLOORS[key]) * share;
-    chrome.columns[key] = Math.floor(chrome.columns[key] - give);
+    out[key] = Math.floor(out[key] - (out[key] - FLOORS[key]) * share);
   }
   // Rounding each column down can still leave a pixel or two over; the matrix
   // is the one with room to spare, so it pays.
-  const left = keys.reduce((sum, key) => sum + chrome.columns[key], 0) - room;
-  if (left > 0) {
-    chrome.columns.range = Math.max(FLOORS.range, chrome.columns.range - left);
-  }
+  const left = keys.reduce((sum, key) => sum + out[key], 0) - room;
+  if (left > 0) out.range = Math.max(FLOORS.range, out.range - left);
+  return out;
+}
+
+/** Scales the saved columns down together until they fit the window. */
+export function fitColumns(): void {
+  if (typeof window === "undefined") return;
+  if (window.innerWidth <= STACKS_BELOW) return;
+  Object.assign(chrome.columns, scaleToFit(chrome.columns, window.innerWidth - CHROME));
 }
 
 function saveColumns(): void {
@@ -110,29 +119,55 @@ export function createWorkspace(columns: Column[]): { element: HTMLElement; rend
     workspace.append(column.element, gutter(column));
   }
 
+  /*
+   * Settle the matrix, then tell the panels what room is left.
+   *
+   * Settle, because the two measurements feed each other: narrowing the column
+   * rewraps the chips and the buttons under the matrix, which makes the rest of
+   * the panel taller, which leaves the matrix less room than the pass that
+   * chose the width thought it had. One pass therefore lands about twenty
+   * pixels over, and since every later repaint runs another pass, the layout
+   * used to creep into place as the reader moved the pointer around - which is
+   * what "it only fits once I hover something" was.
+   *
+   * Three passes at most. Each one is a forced layout, and the answer has
+   * always settled by the second: what is being chased is a rewrap, and there
+   * are only so many rows of chips.
+   */
   const fitHeight = () => {
-    ceiling = fitMatrix(workspace);
-    workspace.style.setProperty("--w-range", `${Math.min(chrome.columns.range, ceiling)}px`);
+    for (let pass = 0; pass < 3; pass += 1) {
+      ceiling = fitMatrix(workspace);
+      const width = `${Math.min(chrome.columns.range, ceiling)}px`;
+      if (workspace.style.getPropertyValue("--w-range") === width) break;
+      workspace.style.setProperty("--w-range", width);
+    }
     capPanels(workspace);
   };
-  window.addEventListener("resize", fitHeight);
-  // The first render measures a page the browser has not laid out yet, so what
-  // it works out is about the page as it was a moment ago - and on a laptop
-  // that is the difference between fitting and not. One more pass once there
-  // is something to measure settles it, and settles in one because the answer
-  // does not depend on whether it is already being worn.
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(fitHeight);
-
   const render = () => {
+    // What the reader asked for, with two ceilings over it: the starting-hands
+    // column may be no wider than its matrix has height for (see `fitMatrix`),
+    // and the four together may be no wider than the window. Worn rather than
+    // saved, so widening the window gives back what narrowing it took.
+    const asked = { ...chrome.columns, range: Math.min(chrome.columns.range, ceiling) };
+    const stacked = typeof window !== "undefined" && window.innerWidth <= STACKS_BELOW;
+    const wearing = stacked ? asked : scaleToFit(asked, window.innerWidth - CHROME);
     for (const column of columns) {
-      const wanted = chrome.columns[column.key];
-      // The starting-hands column has a ceiling the window sets as well as the
-      // one the reader sets, and the smaller of the two wins. See `fitMatrix`.
-      const width = column.key === "range" ? Math.min(wanted, ceiling) : wanted;
-      workspace.style.setProperty(`--w-${column.key}`, `${width}px`);
+      workspace.style.setProperty(`--w-${column.key}`, `${wearing[column.key]}px`);
     }
     fitHeight();
   };
+
+  // A window that changes size changes both answers - how wide the four
+  // columns may be and how tall the panels may be - so the whole measurement
+  // runs again, not just the height half of it. Listening with `fitHeight`
+  // alone left the columns at the width they were chosen for, which on a
+  // narrowed window put the last one off the right-hand edge.
+  window.addEventListener("resize", render);
+  // The first render measures a page the browser has not laid out yet, so what
+  // it works out is about the page as it was a moment ago - and on a laptop
+  // that is the difference between fitting and not. One more pass once there
+  // is something to measure settles it.
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(render);
 
   return { element: workspace, render };
 }
@@ -216,6 +251,9 @@ const FITS_ABOVE = 640;
  */
 const UNCAPPED = ".panel-range, .panel-output";
 
+/** The lists that give up their height when there is a ceiling to do it under. */
+const UNDER_THE_CAP = ".stats-body, .panel-flops";
+
 /**
  * Tells the panels how much height they may take before they have to scroll
  * inside themselves.
@@ -242,12 +280,26 @@ function capPanels(workspace: HTMLElement): void {
     (tallest, panel) => Math.max(tallest, panel.getBoundingClientRect().height),
     0,
   );
-  if (room < fixed) {
-    uncap(workspace);
-    return;
-  }
-  workspace.style.setProperty("--panel-max", `${Math.max(320, Math.floor(room))}px`);
+  // Where a panel that cannot shrink is already past the bottom, the page is
+  // going to scroll by that much whatever happens here - but that is a reason
+  // to stop capping at the window, not a reason to stop capping. Giving up
+  // outright turned twenty pixels of scrolling nobody could avoid into three
+  // hundred that everybody could: the statistics panel went back to its full
+  // height and took the page with it.
+  const limit = Math.max(320, Math.floor(Math.max(room, fixed)));
+  workspace.style.setProperty("--panel-max", `${limit}px`);
   workspace.classList.add("capped");
+  // A ceiling nothing reaches is worse than none: it leaves boxes that are
+  // scroll containers with nothing to scroll, and those swallow the gesture
+  // that would have scrolled the page.
+  if (!bites(workspace)) uncap(workspace);
+}
+
+/** Whether the ceiling is doing anything - is any list actually scrolling under it? */
+function bites(workspace: HTMLElement): boolean {
+  return Array.from(workspace.querySelectorAll<HTMLElement>(UNDER_THE_CAP)).some(
+    (list) => list.scrollHeight - list.clientHeight > 1,
+  );
 }
 
 /**

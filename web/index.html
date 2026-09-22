@@ -40,6 +40,26 @@
         "sameAs": ["https://github.com/matyushinleonid/kongzilla"]
       }
     </script>
+    <!--
+      The pinned colour scheme, stamped before anything paints.
+
+      Everything else about the theme lives in `ui/theme.ts`, which runs when
+      the app's module does - and that is after this page has already been
+      drawn once. A reader who pinned a scheme their system disagrees with
+      would watch the loading line below in the wrong one until then, so the
+      stamp is put on here as well. The key is `theme.ts`'s; if it moves, it
+      moves in both places.
+    -->
+    <script>
+      try {
+        var pinned = localStorage.getItem("kongzilla.theme");
+        if (pinned === "light" || pinned === "dark") {
+          document.documentElement.dataset.theme = pinned;
+        }
+      } catch (e) {
+        /* Blocked storage just means the system setting wins. */
+      }
+    </script>
   </head>
   <body>
     <div id="app" class="loading">Loading engine…</div>

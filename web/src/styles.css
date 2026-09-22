@@ -248,8 +248,26 @@
   --good: #45a05c;
 }
 
+/*
+ * What the browser's own widgets are drawn in.
+ *
+ * Scrollbars, the ranking dropdown's list, the checkbox, the number input's
+ * spinner: none of those are the app's to paint, and the browser paints them
+ * from `color-scheme` rather than from anything here. Left at `light dark`
+ * alone it follows the system - so a reader on a light system who pinned dark
+ * got the dark app with a white scrollbar down the statistics and a white
+ * dropdown over it. A pinned choice has to say which of the two it is.
+ */
 :root {
   color-scheme: light dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 * {
@@ -486,12 +504,17 @@ body {
   gap: 4px;
 }
 
+/* A button does not inherit the page's colour - it starts at the browser's own
+   black - so the tile says which ink it is written in. Without it the equity
+   on the badge came out black whatever the theme, which is invisible on a dark
+   one. */
 .seat {
   position: relative;
   padding: 3px 3px 6px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 4px;
+  color: var(--ink);
   cursor: pointer;
 }
 
@@ -571,8 +594,11 @@ body {
   border-radius: 1px;
 }
 
+/* Part weight is part colour, faded towards the empty cell beside it rather
+   than towards a light grey of its own: mixing into a fixed pale colour drew
+   near-white cells across a dark thumbnail. */
 .thumb-matrix i.on {
-  background: color-mix(in srgb, var(--select) calc(var(--weight) * 100%), #ededed);
+  background: color-mix(in srgb, var(--select) calc(var(--weight) * 100%), var(--track));
 }
 
 .seat-badge {
@@ -897,9 +923,13 @@ body {
   font-size: 10px;
 }
 
+/* The selected brush wears the selection colour, which is amber in either
+   theme - so its ink is fixed too. Following the theme put pale text on amber
+   in the dark one. */
 .brush.active {
   background: var(--select);
   border-color: var(--select-edge);
+  color: #202020;
   font-weight: 700;
 }
 
@@ -2646,20 +2676,29 @@ body.resizing {
   background: none;
 }
 
+/*
+ * The ink of a suit, not its fill.
+ *
+ * Each suit has two colours: one to write in and one to fill a tile with. They
+ * are the same sort of colour in the light theme and opposites in the dark one
+ * - what you fill with there is dark, so that white can sit on it. A pip drawn
+ * in the fill colour therefore all but disappeared on a dark panel, and went
+ * altogether on a row washed in a colour near its own.
+ */
 .pip.suit-h {
-  color: var(--suit-h-solid);
+  color: var(--suit-h-fg);
 }
 
 .pip.suit-d {
-  color: var(--suit-d-solid);
+  color: var(--suit-d-fg);
 }
 
 .pip.suit-c {
-  color: var(--suit-c-solid);
+  color: var(--suit-c-fg);
 }
 
 .pip.suit-s {
-  color: var(--suit-s-solid);
+  color: var(--suit-s-fg);
 }
 
 /* equity graph */
