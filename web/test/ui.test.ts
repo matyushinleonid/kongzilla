@@ -294,6 +294,7 @@ describe("the range panel", () => {
       "80bb",
       "60bb",
       "40bb",
+      "30bb",
       "20bb",
     ]);
     expect(stacks[0].classList.contains("active")).toBe(true);
@@ -363,8 +364,11 @@ describe("the range panel", () => {
     expect(state().players[state().active].percent).toBeGreaterThan(16);
 
     // Twenty blinds is a complete depth: the opens, the defences, and the limp
-    // the small blind still makes that shallow.
-    stacks[4].click();
+    // the small blind still makes that shallow. By the label rather than by
+    // where it sits, so that adding a depth between them does not make this
+    // test about a different one.
+    const depth = (label: string) => stacks.find((chip) => chip.textContent === label)!;
+    depth("20bb").click();
     renderAll();
     expect(chrome.libraryStack).toBe("20bb");
     expect(opens()).toHaveLength(7);
@@ -378,6 +382,16 @@ describe("the range panel", () => {
       "SB",
       "SB limp",
     ]);
+    // And so is thirty, which was shot last and in its own order - the
+    // three-bets first, the small blind's own open an hour after the rest.
+    depth("30bb").click();
+    renderAll();
+    expect(chrome.libraryStack).toBe("30bb");
+    expect(opens()).toHaveLength(7);
+    expect(defends()).toHaveLength(8);
+    depth("20bb").click();
+    renderAll();
+
     // Isolating a limp on twenty blinds is a small raise, and the big blind
     // never folds to one - it is already in for a blind.
     expect(defends()[7].title).toMatch(/over a small-blind limp/);
@@ -1023,7 +1037,7 @@ describe("the statistics panel", () => {
       Array.from(mtt().querySelectorAll<HTMLButtonElement>(".stack-chip")).map(
         (chip) => chip.textContent,
       ),
-    ).toEqual(["100bb", "80bb", "60bb", "40bb", "20bb"]);
+    ).toEqual(["100bb", "80bb", "60bb", "40bb", "30bb", "20bb"]);
 
     // Its one depth is still a chip, because a chip is a button and reads as
     // one - it just does not stretch across the row.

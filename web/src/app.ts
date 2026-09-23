@@ -16,6 +16,7 @@
 
 import { onError, repaint, subscribe } from "./store";
 import { createBoardPanel } from "./ui/boardPanel";
+import { createCalculator } from "./ui/calculator";
 import { dismissOne, installDismiss } from "./ui/dismiss";
 import { createFlopsPanel } from "./ui/flopsPanel";
 import { createHotkeySheet, installHotkeys } from "./ui/hotkeys";
@@ -41,6 +42,7 @@ export interface App {
   stats: HTMLElement;
   output: HTMLElement;
   flops: HTMLElement;
+  calc: HTMLElement;
   sheet: HTMLElement;
   mascot: HTMLElement;
   /** Where a message - an error, or a key saying what it did - is shown. */
@@ -66,11 +68,20 @@ export function createApp(root: HTMLElement): App {
   boardColumn.className = "stacked-column";
   boardColumn.append(board.element, flops.element);
 
+  // The calculator sits under the views rather than inside them: what a call
+  // is worth is a question about the spot, not about whichever view is on
+  // screen. Same arrangement as the board and the flops - two panels in one
+  // column, and the one with a list in it gives up the height.
+  const calculator = createCalculator();
+  const outputColumn = document.createElement("div");
+  outputColumn.className = "stacked-column";
+  outputColumn.append(output.element, calculator.element);
+
   const workspace = createWorkspace([
     { key: "range", element: range.element, label: "the starting-hand panel", min: 340 },
     { key: "board", element: boardColumn, label: "the board panel", min: 190 },
     { key: "stats", element: stats.element, label: "the statistics panel", min: 260 },
-    { key: "output", element: output.element, label: "the output panel", min: 280 },
+    { key: "output", element: outputColumn, label: "the output panel", min: 280 },
   ]);
 
   const sheet = createHotkeySheet();
@@ -113,6 +124,7 @@ export function createApp(root: HTMLElement): App {
     stats.render();
     output.render();
     flops.render();
+    calculator.render();
     workspace.render();
   };
   const unsubscribe = subscribe(render);
@@ -139,6 +151,7 @@ export function createApp(root: HTMLElement): App {
     stats: stats.element,
     output: output.element,
     flops: flops.element,
+    calc: calculator.element,
     sheet: sheet.element,
     mascot: mascot.element,
     toast,

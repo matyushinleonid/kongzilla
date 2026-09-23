@@ -1927,10 +1927,13 @@ describe("equity before the flop, from both sides", () => {
     app.render();
 
     expect(app.output.textContent).toMatch(/comes from the pass over flops/);
+    // Two seats are waiting now - this one for its equity, the new one for
+    // everything - and the button says so rather than naming half the job.
     const again = Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".btn")).find((button) =>
-      button.textContent?.startsWith("Add equity over"),
+      button.textContent?.startsWith("Calculate over"),
     );
     expect(again, "the button comes back, saying what is left to do").toBeDefined();
+    expect(again!.textContent).toContain("2 ranges");
 
     again!.click();
     await vi.waitFor(() => expect(chrome.preflopRunning).toBe(false), { timeout: 30000 });
@@ -4613,6 +4616,493 @@ describe("being told when something is wrong", () => {
     await vi.waitFor(() => expect(written).toHaveLength(1));
     expect(app.toast.hidden).toBe(false);
     expect(app.toast.textContent).toMatch(/copied/i);
+    app.teardown();
+  }, 30000);
+});
+
+describe("a seat nobody has typed a range into", () => {
+  test("settles instead of asking for a pass it cannot record", async () => {
+    const app = await open();
+    type(app, "22+, A2s+, KTo+");
+    app.strip.querySelector<HTMLButtonElement>(".deal-hand")!.click();
+    app.render();
+    card(app.strip, "Tc");
+    card(app.strip, "Td");
+    app.render();
+
+    // The empty seat between them. A pass over no hands is free, so the app
+    // runs it without asking - and used to have nothing to show for it
+    // afterwards, so it asked again, and again: the button and the note
+    // blinked for as long as the reader sat here.
+    seats2(app)[1].click();
+    app.render();
+    expect(state().players[state().active].combos).toBe(0);
+    await vi.waitFor(() => expect(chrome.preflop).not.toBeNull(), { timeout: 10000 });
+
+    // And it stays settled: no second run, no third.
+    const running: boolean[] = [];
+    for (let tick = 0; tick < 12; tick += 1) {
+      await new Promise((rest) => setTimeout(rest, 60));
+      app.render();
+      running.push(chrome.preflopRunning);
+    }
+    expect(running.some(Boolean), "a pass that keeps running is a panel that blinks").toBe(false);
+    expect(chrome.preflop).not.toBeNull();
+    app.teardown();
+  }, 30000);
+});
+
+describe("the equity readout in the strip", () => {
+  const who = (app: App) => app.strip.querySelector(".equity-who")!.textContent ?? "";
+  const lines = (app: App) =>
+    Array.from(app.strip.querySelectorAll<HTMLElement>(".equity-line")).map(
+      (line) => line.textContent ?? "",
+    );
+
+  test("the range you have open goes first, whichever seat it is", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, "AA");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "KK");
+    app.render();
+
+    const percent = (line: string) => Number(/([\d.]+)%/.exec(line)![1]);
+
+    // On B: the numbers are B's, and the heading says so in that order. Kings
+    // have flopped a set here, so they are a long way ahead.
+    expect(who(app)).toBe("Range B vs Range A");
+    const theirs = percent(lines(app)[0]);
+    expect(theirs).toBeGreaterThan(80);
+
+    // On A: the same pot read from the other side, which is the other answer.
+    seats2(app)[0].click();
+    app.render();
+    expect(who(app)).toBe("Range A vs Range B");
+    const mine = percent(lines(app)[0]);
+    expect(mine).toBeLessThan(20);
+    expect(mine + theirs).toBeCloseTo(100, 1);
+    app.teardown();
+  }, 30000);
+
+  test("with three in the pot it also says how the named pair is doing", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, "AA");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "KK");
+    app.strip.querySelector<HTMLButtonElement>(".seat-add")!.click();
+    app.render();
+    seats2(app)[2].click();
+    app.render();
+    type(app, "72o");
+    seats2(app)[0].click();
+    app.render();
+
+    // Three ways: one line each, the open one first.
+    expect(who(app)).toBe("3-way");
+    expect(lines(app)[0]).toMatch(/^Range A/);
+    const threeWay = lines(app).length;
+
+    // Against the whole pot is one question; against one of them is another,
+    // and the reader has already named which over in the output panel. So it
+    // is answered here as a line rather than by swapping the panel over.
+    const versus = app.output.querySelector<HTMLButtonElement>(".versus-output")!;
+    versus.click();
+    app.render();
+    expect(state().versusSeat).not.toBeNull();
+    const pair = app.strip.querySelector<HTMLElement>(".equity-pair");
+    expect(pair, "the named pair gets a line of its own").not.toBeNull();
+    expect(pair!.textContent).toMatch(/^vs Range B:\s*[\d.]+%$/);
+    expect(lines(app)).toHaveLength(threeWay + 1);
+    // Aces against kings alone on a board of kings is not the three-way number.
+    expect(pair!.textContent).not.toBe(lines(app)[0]);
+
+    // And back to the whole pot, the extra line goes.
+    while (state().versusSeat !== null) {
+      versus.click();
+      app.render();
+    }
+    expect(app.strip.querySelector(".equity-pair")).toBeNull();
+    app.teardown();
+  }, 30000);
+});
+
+describe("what a call costs and what it is worth", () => {
+  const field = (app: App, which: string) =>
+    app.calc.querySelector<HTMLInputElement>(`.calc-${which}`)!;
+
+  /** One line of the calculator, by the name printed on it. */
+  const line = (app: App, name: string) => {
+    const row = Array.from(app.calc.querySelectorAll<HTMLElement>(".calc-readout")).find(
+      (candidate) => candidate.querySelector(".field-label")?.textContent === name,
+    );
+    if (!row) throw new Error(`no line called ${name}`);
+    return {
+      row,
+      value: row.querySelector(".calc-value")!.textContent ?? "",
+      note: row.querySelector(".calc-note")!.textContent ?? "",
+      number: Number((row.querySelector(".calc-value")!.textContent ?? "").replace(/[^\d.]/g, "")),
+    };
+  };
+
+  const typeIn = (input: HTMLInputElement, value: number) => {
+    input.value = String(value);
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    app!.render();
+  };
+
+  /** Two ranges on a board, which is what the EV line needs. */
+  const spot = async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, "22+, A2s+, KTo+");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "88+, ATs+, AQo+");
+    seats2(app)[0].click();
+    app.render();
+    return app;
+  };
+
+  test("the price of a call, worked out from the pot and the bet", async () => {
+    const app = await spot();
+    // The pot as it stands with their bet in it, and the bet: the two numbers
+    // a reader can read off a table without doing arithmetic first.
+    typeIn(field(app, "bet"), 50);
+    typeIn(field(app, "pot"), 150);
+
+    // Half the pot is the price every player knows: a quarter.
+    expect(line(app, "Pot odds").value).toBe("25.0%");
+    // The two numbers the percentage is the ratio of, so the reader can see
+    // that it is the pot the call makes and not the one it is called into.
+    expect(line(app, "Pot odds").note).toBe("50 / 200 after the call");
+    expect(line(app, "Pot odds").row.title).toContain("3.0 to 1");
+    // And two thirds is what has to carry on, or betting anything is free.
+    expect(line(app, "MDF").value).toBe("66.7%");
+
+    // Each box is what was typed into it: the bet moving does not move the pot
+    // underneath the reader's hands.
+    typeIn(field(app, "bet"), 100);
+    expect(field(app, "pot").value).toBe("150");
+    expect(line(app, "Pot odds").value).toBe("40.0%");
+
+    // A pot-sized bet: a third to call, half to defend.
+    typeIn(field(app, "pot"), 200);
+    expect(line(app, "Pot odds").value).toBe("33.3%");
+    expect(line(app, "MDF").value).toBe("50.0%");
+
+    // Nothing to price is not a price of nothing.
+    typeIn(field(app, "bet"), 0);
+    typeIn(field(app, "pot"), 0);
+    expect(line(app, "Pot odds").value).toBe("—");
+    expect(line(app, "MDF").value).toBe("—");
+
+    // Nor is a bet standing in a pot too small to hold it - and a spot the
+    // price refuses is not one the value answers either.
+    typeIn(field(app, "pot"), 40);
+    typeIn(field(app, "bet"), 60);
+    expect(line(app, "Pot odds").value).toBe("—");
+    expect(line(app, "Pot odds").note).toBe("the bet is bigger than the pot");
+    expect(line(app, "MDF").value).toBe("—");
+    expect(line(app, "EV call").value).toBe("—");
+    expect(line(app, "EV call").note).toBe("the bet is bigger than the pot");
+    app.teardown();
+  }, 30000);
+
+  test("the bet buttons are named for the pot they are a share of", async () => {
+    const app = await spot();
+    typeIn(field(app, "bet"), 0);
+    typeIn(field(app, "pot"), 120);
+    const press = (label: string) => {
+      const button = Array.from(app.calc.querySelectorAll<HTMLButtonElement>(".calc-size")).find(
+        (candidate) => candidate.textContent === label,
+      )!;
+      button.click();
+      app.render();
+    };
+    // Half of what was in the middle before the bet, and the middle grows by
+    // what was put into it.
+    press("½");
+    expect(field(app, "bet").value).toBe("60");
+    expect(field(app, "pot").value).toBe("180");
+    expect(line(app, "Pot odds").value).toBe("25.0%");
+
+    // Still a share of the same hundred and twenty, not of the pot it made.
+    press("pot");
+    expect(field(app, "bet").value).toBe("120");
+    expect(field(app, "pot").value).toBe("240");
+    expect(line(app, "Pot odds").value).toBe("33.3%");
+    app.teardown();
+  }, 30000);
+
+  test("what calling is worth, at the equity this range actually has", async () => {
+    const app = await spot();
+    typeIn(field(app, "bet"), 50);
+    typeIn(field(app, "pot"), 150);
+
+    // The equity is not typed in - it is the range against the other one, and
+    // the line says which one it means.
+    const ev = line(app, "EV call");
+    expect(ev.note).toMatch(/at \d+\.\d\d% vs B/);
+    const equity = Number(/at (\d+\.\d\d)%/.exec(ev.note)![1]) / 100;
+
+    // EV = eq·pot − (1−eq)·bet, which is the same thing as saying a call shows
+    // a profit exactly when the equity beats the pot odds.
+    const worth = equity * 150 - (1 - equity) * 50;
+    expect(ev.number).toBeCloseTo(Math.abs(worth), 1);
+    expect(ev.value.startsWith(worth >= 0 ? "+" : "\u2212")).toBe(true);
+    expect(worth > 0).toBe(equity * 100 > Number(line(app, "Pot odds").value.replace("%", "")));
+
+    // A price steep enough is a call nobody can make: nearly the whole pot is
+    // the bet standing in it, so a third of the time is not nearly enough.
+    typeIn(field(app, "pot"), 10000);
+    typeIn(field(app, "bet"), 9900);
+    expect(line(app, "EV call").value.startsWith("\u2212")).toBe(true);
+    expect(line(app, "EV call").row.classList.contains("bad")).toBe(true);
+    app.teardown();
+  }, 30000);
+
+  test("what a call is worth before the flop, and again when one is dealt", async () => {
+    const app = await open();
+    type(app, "22+, A2s+, KTo+");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "88+, ATs+, AQo+");
+    seats2(app)[0].click();
+    app.render();
+    typeIn(field(app, "bet"), 50);
+    typeIn(field(app, "pot"), 150);
+    expect(state().board).toBe("");
+
+    // Two ranges and no board is a question the pot's own equity report
+    // answers, and it is the number already on the seat's tile - so there is
+    // nothing to wait for and nothing to press.
+    const before = line(app, "EV call");
+    expect(before.value).not.toBe("—");
+    expect(before.note, "which board it is over").toMatch(/before the flop$/);
+    const tile = app.strip.querySelector(".seat-badge")!.textContent ?? "";
+    expect(before.note).toContain(tile.replace("%", "").slice(0, 5));
+
+    // A board changes it, and says so by dropping the qualifier.
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    const dealt = line(app, "EV call");
+    expect(dealt.note).not.toMatch(/before the flop/);
+    expect(dealt.value).not.toBe(before.value);
+
+    // And clearing it goes back to the preflop answer rather than leaving the
+    // one that was about a board nobody is looking at any more.
+    for (const gone of ["Kh", "7h", "2c"]) card(app.board, gone);
+    expect(state().board).toBe("");
+    expect(line(app, "EV call").value).toBe(before.value);
+    expect(line(app, "EV call").note).toMatch(/before the flop$/);
+    app.teardown();
+  }, 30000);
+
+  test("the EV is about whatever the pointer is on", async () => {
+    const app = await spot();
+    typeIn(field(app, "bet"), 50);
+    typeIn(field(app, "pot"), 150);
+
+    // A range facing a bet is a hundred decisions, so the range's own average
+    // answers a question nobody has. Left alone, that is what it says.
+    const whole = line(app, "EV call");
+    expect(whole.note).toMatch(/^at \d+\.\d\d% vs B$/);
+
+    // A cell: the hands in it, and named by the cell.
+    cell(app, "AA").dispatchEvent(new window.MouseEvent("pointerenter", { bubbles: true }));
+    app.render();
+    const aces = line(app, "EV call");
+    expect(aces.note).toMatch(/^AA at \d+\.\d\d% vs B$/);
+    expect(aces.value).not.toBe(whole.value);
+
+    // A rung of the ladder: the hands on it. The pointer leaves the cell on
+    // its way there, as a pointer does.
+    cell(app, "AA").dispatchEvent(new window.MouseEvent("pointerleave", { bubbles: true }));
+    row(app, "top pair").dispatchEvent(new window.MouseEvent("pointerenter", { bubbles: true }));
+    app.render();
+    expect(line(app, "EV call").note).toMatch(/^top pair at \d+\.\d\d% vs B$/);
+
+    // One combination, from the table under the equity graph.
+    tab(app, "eq-graph").click();
+    app.render();
+    const first = app.output.querySelector<HTMLElement>(".eq-table .eq-row:not(.eq-head)")!;
+    first.dispatchEvent(new window.MouseEvent("pointerenter", { bubbles: true }));
+    app.render();
+    const hand = line(app, "EV call");
+    expect(hand.note).toMatch(
+      /^[AKQJT2-9][\u2660\u2665\u2666\u2663][AKQJT2-9][\u2660\u2665\u2666\u2663] at/,
+    );
+    // The best hand in the range is worth more than the range is.
+    const percent = (note: string) => Number(/(\d+\.\d\d)%/.exec(note)![1]);
+    expect(percent(hand.note)).toBeGreaterThan(percent(whole.note));
+
+    // And letting go puts the range back.
+    first.dispatchEvent(new window.MouseEvent("pointerleave", { bubbles: true }));
+    row(app, "top pair").dispatchEvent(new window.MouseEvent("pointerleave", { bubbles: true }));
+    app.render();
+    expect(line(app, "EV call").note).toBe(whole.note);
+    expect(line(app, "EV call").value).toBe(whole.value);
+    app.teardown();
+  }, 30000);
+
+  test("a key that is not a digit is the point the reader was reaching for", async () => {
+    const app = await spot();
+    const pot = field(app, "pot");
+    pot.focus();
+    pot.value = "12";
+    pot.setSelectionRange(2, 2);
+
+    // On a Russian layout the full stop is where "ю" is, and a box that
+    // answers it with nothing leaves the reader pressing the key again.
+    const typed = (key: string) => {
+      const event = new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      pot.dispatchEvent(event);
+      app.render();
+      return event.defaultPrevented;
+    };
+    expect(typed("\u044e"), "the key is taken rather than left to the box").toBe(true);
+    expect(pot.value).toBe("12.");
+    // And the value follows as soon as there is something to follow.
+    pot.value = "12.5";
+    pot.dispatchEvent(new window.Event("input", { bubbles: true }));
+    app.render();
+    expect(chrome.pot).toBe(12.5);
+
+    // One point only: the second press is not a second point.
+    expect(typed(",")).toBe(true);
+    expect(pot.value).toBe("12.5");
+
+    // Digits and the keys that edit are left alone.
+    expect(typed("7")).toBe(false);
+    expect(typed("Backspace")).toBe(false);
+    expect(typed("ArrowLeft")).toBe(false);
+
+    // Anything that arrives another way - a paste - keeps its digits.
+    pot.value = "1 200,5 bb";
+    pot.dispatchEvent(new window.Event("input", { bubbles: true }));
+    app.render();
+    expect(pot.value).toBe("1200.5");
+    expect(chrome.pot).toBe(1200.5);
+    app.teardown();
+  }, 30000);
+
+  test("the opponent is the one named beside it", async () => {
+    const app = await spot();
+    // A third range, so there is something to round between.
+    app.strip.querySelector<HTMLButtonElement>(".seat-add")!.click();
+    app.render();
+    seats2(app)[2].click();
+    app.render();
+    type(app, "72o");
+    seats2(app)[0].click();
+    app.render();
+
+    const versus = app.calc.querySelector<HTMLButtonElement>(".versus-calc")!;
+    const said = () => line(app, "EV call").note;
+    const seen = new Set<string>();
+    for (let press = 0; press < 3; press += 1) {
+      seen.add(said());
+      versus.click();
+      app.render();
+    }
+    // Against the field, against B, against C: three answers, not one.
+    expect(seen.size).toBe(3);
+    expect([...seen].some((note) => note.includes("against the field"))).toBe(true);
+
+    // And it is the same setting the views use, not a second one.
+    expect(versus.textContent).toBe(
+      app.output.querySelector<HTMLButtonElement>(".versus-output")!.textContent,
+    );
+    app.teardown();
+  }, 30000);
+
+  test("with three at the table it says which button would answer it", async () => {
+    const app = await open();
+    type(app, "22+, A2s+, KTo+");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "88+, ATs+");
+    app.strip.querySelector<HTMLButtonElement>(".seat-add")!.click();
+    app.render();
+    seats2(app)[2].click();
+    app.render();
+    type(app, "76s, 65s");
+    seats2(app)[0].click();
+    app.render();
+    expect(state().board).toBe("");
+
+    // Against everybody at once, the pot's own report answers it and there is
+    // nothing to run.
+    expect(state().versusSeat).toBeNull();
+    expect(line(app, "EV call").value).not.toBe("—");
+
+    // Against one of the three, before the flop, only a pass can say - so the
+    // line names the button that runs one, rather than saying nothing.
+    app.output.querySelector<HTMLButtonElement>(".versus-output")!.click();
+    app.render();
+    expect(state().versusSeat).not.toBeNull();
+    const waiting = line(app, "EV call");
+    expect(waiting.value).toBe("—");
+    expect(waiting.note).toBe("press Calculate in the statistics panel");
+    // And the button it names is the one that is on screen, captioned that way.
+    const run = Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".btn")).find((button) =>
+      button.textContent?.startsWith("Calculate over"),
+    );
+    expect(run, "the button the line names is there to press").toBeDefined();
+    expect(run!.hidden).toBe(false);
+    expect(waiting.row.title).toContain("Calculate button in the statistics panel");
+    app.teardown();
+  }, 30000);
+
+  test("the price still reads with nothing to measure against", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    // One range and an empty seat: arithmetic yes, equity no.
+    expect(line(app, "Pot odds").value).toBe("25.0%");
+    expect(line(app, "MDF").value).toBe("66.7%");
+    expect(line(app, "EV call").value).toBe("—");
+    expect(line(app, "EV call").note).toMatch(/measure against/);
+    app.teardown();
+  }, 30000);
+
+  test("MDF is a verdict on what the reader has marked as continuing", async () => {
+    const app = await spot();
+    typeIn(field(app, "bet"), 50);
+    typeIn(field(app, "pot"), 150);
+    headButton(app.stats, "Clear").click();
+    app.render();
+
+    // Nothing decided yet is not the same as folding everything.
+    expect(line(app, "MDF").note).toBe("");
+
+    // A little of the range continuing, against a minimum of two thirds.
+    row(app, "top pair").click();
+    app.render();
+    const under = line(app, "MDF");
+    expect(under.note).toMatch(/painted \d+\.\d%/);
+    expect(under.row.classList.contains("under"), "below the minimum, and said so").toBe(true);
+
+    // Everything continuing is above it, whatever the bet.
+    swatch(app, "blue").click();
+    app.render();
+    Array.from(app.stats.querySelectorAll<HTMLButtonElement>(".stat-row")).forEach((element) => {
+      if (!element.hidden) element.click();
+    });
+    app.render();
+    expect(line(app, "MDF").row.classList.contains("under")).toBe(false);
     app.teardown();
   }, 30000);
 });

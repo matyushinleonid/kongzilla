@@ -745,6 +745,19 @@ body {
   justify-content: center;
 }
 
+.equity-head {
+  gap: 6px;
+  align-items: baseline;
+  margin-bottom: 2px;
+}
+
+/* The one pair out of a multiway pot, under the lines about the whole of it. */
+.equity-line.equity-pair {
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px solid var(--line-soft);
+}
+
 .equity-who {
   margin: 0 0 4px;
   font-weight: 700;
@@ -2504,12 +2517,138 @@ body.resizing {
   font-size: 11px;
 }
 
+/*
+ * The views, under the tabs and over the calculator.
+ *
+ * The panel takes the same bargain the statistics panel takes: told where the
+ * screen ends, it lets the view inside it scroll rather than growing the page.
+ * It used to be exempt, on the grounds that a pie and a graph are pictures
+ * with no list to give up - but the equity table under the graph is a list,
+ * and the price of the exemption was the calculator below being pushed off the
+ * bottom on a short screen.
+ */
+.panel-output {
+  display: flex;
+  flex-direction: column;
+  max-height: var(--panel-max);
+}
+
 .output-body {
   background: var(--panel-sunken);
   border: 1px solid var(--line-soft);
   border-radius: 3px;
   padding: 6px 8px 8px;
   min-height: 120px;
+}
+
+.workspace.capped .output-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/*
+ * What a call costs and what it is worth.
+ *
+ * Its own panel under the views, in the room they are not using. Kept short -
+ * three numbers to type and three that follow from them - because the room it
+ * is in is whatever the views leave.
+ */
+.panel-calc {
+  flex: none;
+  display: grid;
+  gap: 3px;
+}
+
+.panel-calc .panel-head {
+  margin-bottom: 1px;
+}
+
+.calc-row {
+  gap: 6px;
+}
+
+.calc-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.calc-field input {
+  width: 58px;
+  padding: 1px 3px;
+  background: var(--panel-sunken);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--ink);
+  font: inherit;
+  text-align: right;
+}
+
+.calc-sizes {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.calc-size {
+  padding: 1px 5px;
+  font-size: 11px;
+}
+
+/* Where every panel keeps the control that says what it is about. */
+.versus-calc {
+  margin-left: auto;
+}
+
+/*
+ * The views give up the height, not the calculator.
+ *
+ * Two panels in one column under one ceiling: the output panel has a list
+ * inside it that can scroll and the calculator is six short lines, so the
+ * ceiling has to land on the one with something to give.
+ */
+.stacked-column .panel-output {
+  flex: 0 1 auto;
+  min-height: 160px;
+}
+
+.calc-rows {
+  display: grid;
+  gap: 1px;
+}
+
+.calc-readout {
+  display: grid;
+  grid-template-columns: 58px 72px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px;
+}
+
+.calc-value {
+  text-align: right;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.calc-note {
+  color: var(--ink-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A call that shows a profit, and one that does not. */
+.calc-readout.good .calc-value {
+  color: var(--good);
+}
+
+.calc-readout.bad .calc-value {
+  color: var(--bad);
+}
+
+/* Continuing with less than the minimum is the thing MDF is there to catch. */
+.calc-readout.under .calc-note {
+  color: var(--warn);
 }
 
 .scroll-x {
@@ -2755,7 +2894,13 @@ body.resizing {
  * a wedge made of lines.
  */
 .pie-grainy .grain {
-  fill: color-mix(in srgb, var(--good) calc(var(--heat) * 100%), var(--bad));
+  color: color-mix(in srgb, var(--good) calc(var(--heat) * 100%), var(--bad));
+  fill: currentColor;
+  /* Its own colour as a hairline round the edge, so neighbours meet rather
+     than leaving the background showing between them: a wedge cut into a
+     hundred shades was drawing ninety-nine pale lines across itself. */
+  stroke: currentColor;
+  stroke-width: 0.004;
 }
 
 /* Which group a wedge is, said at the rim and only there. */

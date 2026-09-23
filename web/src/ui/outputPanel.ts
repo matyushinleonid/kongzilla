@@ -10,6 +10,7 @@
 import {
   chrome,
   classLabels,
+  cycleVersusSeat,
   comboColour,
   comboStats,
   colourByCombo,
@@ -29,11 +30,19 @@ import {
   rankByCombo,
   revision,
   repaint,
-  setVersusSeat,
   state,
   statDefs,
 } from "../store";
-import { RANKS, SUITS, SUIT_GLYPH, comboName, pips, seatName, seatTag } from "./cards";
+import {
+  RANKS,
+  SUITS,
+  SUIT_GLYPH,
+  comboClass as classOfCombo,
+  comboName,
+  pips,
+  seatName,
+  seatTag,
+} from "./cards";
 import type { PreflopBreakdown } from "../types";
 
 type Tab = typeof chrome.output;
@@ -86,15 +95,9 @@ export function createOutputPanel(): { element: HTMLElement; render: () => void 
   const versusButton = document.createElement("button");
   versusButton.type = "button";
   versusButton.className = "btn versus-button versus-output";
-  versusButton.addEventListener("click", () => {
-    const view = state();
-    const others = view.players.map((_, index) => index).filter((index) => index !== view.active);
-    if (others.length === 0) return;
-    // Round the seats in order and then back to the field, which is where it
-    // starts and what most readers want most of the time.
-    const at = view.versusSeat === null ? -1 : others.indexOf(view.versusSeat);
-    setVersusSeat(at + 1 < others.length ? others[at + 1] : null);
-  });
+  // Round the seats in order and then back to the field, which is where it
+  // starts and what most readers want most of the time.
+  versusButton.addEventListener("click", cycleVersusSeat);
   head.append(title, versusButton);
 
   const tabs = document.createElement("div");
@@ -381,29 +384,8 @@ function perClassEquity(): { equity: number[]; weight: number[] } | null {
   return { equity, weight };
 }
 
-/** Which matrix cell a combo index belongs to, mirroring the engine's layout. */
-const COMBO_CLASS: number[] = buildComboClass();
-
-function buildComboClass(): number[] {
-  const table = new Array<number>(1326);
-  for (let high = 1; high < 52; high += 1) {
-    for (let low = 0; low < high; low += 1) {
-      const index = (high * (high - 1)) / 2 + low;
-      const rankA = high >> 2;
-      const rankB = low >> 2;
-      const suited = (high & 3) === (low & 3);
-      const hi = Math.max(rankA, rankB);
-      const lo = Math.min(rankA, rankB);
-      const hiCell = 12 - hi;
-      const loCell = 12 - lo;
-      table[index] = suited && hi !== lo ? hiCell * 13 + loCell : loCell * 13 + hiCell;
-    }
-  }
-  return table;
-}
-
 function comboClass(combo: number): number {
-  return COMBO_CLASS[combo] ?? 0;
+  return classOfCombo(combo);
 }
 
 function equityMatrixView(): Node[] {
@@ -621,7 +603,7 @@ function equityGraphView(): Node[] {
     // Say what the hand actually is, not just which two cards it holds.
     // The hand under the cursor here is the hand under the cursor everywhere:
     // the matrix outlines it and the statistics light what it makes.
-    peekAt(COMBO_CLASS[point.combo] ?? null, point.combo);
+    peekAt(classOfCombo(point.combo), point.combo);
     const what = describeCombo(point.combo);
     readout.replaceChildren(
       pips(comboName(point.combo)),
@@ -716,9 +698,7 @@ function equityGraphView(): Node[] {
     tie.textContent = `${(point.tie * 100).toFixed(3)}`;
     row.append(rank, hand, equity, win, tie);
     row.dataset.combo = String(point.combo);
-    row.addEventListener("pointerenter", () =>
-      peekAt(COMBO_CLASS[point.combo] ?? null, point.combo),
-    );
+    row.addEventListener("pointerenter", () => peekAt(classOfCombo(point.combo), point.combo));
     row.addEventListener("pointerleave", () => {
       if (chrome.peekCombo === point.combo) peekAt(null);
     });
@@ -1113,7 +1093,7 @@ function grainyPie(slices: Slice[]): { svg: SVGSVGElement; readout: HTMLElement 
     // The hand under the pointer here is the hand under the pointer
     // everywhere: the matrix outlines it and the statistics light what it
     // makes.
-    peekAt(COMBO_CLASS[grain.combo] ?? null, grain.combo);
+    peekAt(classOfCombo(grain.combo), grain.combo);
     const what = describeCombo(grain.combo);
     readout.replaceChildren(
       pips(comboName(grain.combo)),

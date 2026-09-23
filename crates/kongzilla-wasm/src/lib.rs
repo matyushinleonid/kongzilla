@@ -589,6 +589,18 @@ impl Engine {
         self.session.colour_by_combo()
     }
 
+    /// Runs the pass over the flops for every seat that still needs one.
+    #[wasm_bindgen(js_name = preflopAll)]
+    pub fn preflop_all(&self) {
+        self.session.preflop_all();
+    }
+
+    /// How many seats are waiting on a pass, either half of it.
+    #[wasm_bindgen(js_name = preflopOutstanding)]
+    pub fn preflop_outstanding(&self) -> usize {
+        self.session.preflop_outstanding()
+    }
+
     /// Which hands are behind each tier of the last pass over the flops.
     ///
     /// Laid out as `combo * 4 + tier`, strongest tier first. Empty when no pass

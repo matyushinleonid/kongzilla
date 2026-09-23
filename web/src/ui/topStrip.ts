@@ -3,7 +3,7 @@
  * equity readout — the same three things Flopzilla puts above its main panels.
  */
 
-import { chrome, mutate, state, repaint } from "../store";
+import { chrome, equityByCombo, mutate, state, repaint } from "../store";
 import { RANKS, SUITS, cardButton, seatName, thumbnail } from "./cards";
 
 export function createTopStrip(): { element: HTMLElement; render: () => void } {
@@ -211,25 +211,41 @@ function equityContent(): Node[] {
   }
 
   const rows: Node[] = [];
+  const head = document.createElement("div");
+  head.className = "row equity-head";
   const who = document.createElement("p");
   who.className = "equity-who";
+  head.append(who);
 
-  if (view.equitySeats.length <= 2) {
-    // Two players: the whole of it - who wins, who splits - about one side.
-    const [mine] = view.equity.players;
+  const multiway = view.equitySeats.length > 2;
+  if (!multiway) {
+    // Two players: the whole of it - who wins, who splits - and about the seat
+    // the reader has open, which is the one they are asking about. A seat its
+    // own filters have emptied is not in the pot, so it is not one of the two
+    // being named either: then this is about the pot as it stands.
+    const at = view.equitySeats.indexOf(view.active);
+    const mine = view.equity.players[Math.max(at, 0)];
+    const order =
+      at < 0
+        ? [...view.equitySeats]
+        : [view.active, ...view.equitySeats.filter((seat) => seat !== view.active)];
     rows.push(
       equityLine("Equity", mine.equity, "strong"),
       equityLine("Win", mine.win),
       equityLine("Tie", mine.tie),
     );
-    who.textContent = view.equitySeats.map((seat) => seatName(view.players[seat])).join(" vs ");
+    who.textContent = order.map((seat) => seatName(view.players[seat])).join(" vs ");
   } else {
     // Three or more: one line each, because the question is now who has the
-    // best of it rather than how one hand splits with one other.
+    // best of it rather than how one hand splits with one other. The seat the
+    // reader has open goes first, whatever order the pot is in.
     who.textContent = `${view.equitySeats.length}-way`;
-    view.equitySeats.forEach((seat, at) => {
-      const player = view.equity!.players[at];
-      if (!player) return;
+    const order = [...view.equitySeats].sort(
+      (a, b) => Number(b === view.active) - Number(a === view.active),
+    );
+    for (const seat of order) {
+      const player = view.equity.players[view.equitySeats.indexOf(seat)];
+      if (!player) continue;
       rows.push(
         equityLine(
           seatName(view.players[seat]),
@@ -238,7 +254,26 @@ function equityContent(): Node[] {
           seat,
         ),
       );
-    });
+    }
+  }
+
+  // Multiway there is a second question - how this range does against one of
+  // them rather than against all of them - and the reader has already said
+  // which one over in the output panel. So it is answered here when there is
+  // an answer, as a line rather than as a second way of reading the panel: a
+  // button that swapped the four lines for one would be a button that hid
+  // what the reader came here for.
+  const named = multiway && view.versusSeat !== null ? view.versusSeat : null;
+  const pair = named === null ? null : headsUp();
+  if (pair && named !== null) {
+    const line = equityLine(
+      `vs ${seatName(view.players[named])}`,
+      pair.equity,
+      "equity-pair",
+      named,
+    );
+    line.title = `${seatName(view.players[view.active])} against ${seatName(view.players[named])} alone, rather than against the whole pot. Which range that is is chosen in the output panel.`;
+    rows.push(line);
   }
 
   const note = document.createElement("p");
@@ -247,7 +282,25 @@ function equityContent(): Node[] {
     ? `exact · ${view.equity.trials.toLocaleString()} run-outs`
     : `sampled · ${view.equity.trials.toLocaleString()} trials`;
 
-  return [who, ...rows, note];
+  return [head, ...rows, note];
+}
+
+/** The active range against the one seat it is measured against. */
+function headsUp(): { equity: number; win: number; tie: number } | null {
+  const data = equityByCombo();
+  if (!data) return null;
+  let held = 0;
+  const sum = { equity: 0, win: 0, tie: 0 };
+  for (let combo = 0; combo < data.equity.length; combo += 1) {
+    const weight = data.weight[combo];
+    if (weight <= 0 || data.equity[combo] < 0) continue;
+    held += weight;
+    sum.equity += weight * data.equity[combo];
+    sum.win += weight * data.win[combo];
+    sum.tie += weight * data.tie[combo];
+  }
+  if (held <= 0) return null;
+  return { equity: sum.equity / held, win: sum.win / held, tie: sum.tie / held };
 }
 
 function equityLine(label: string, value: number, extra = "", seat?: number): HTMLElement {

@@ -36,6 +36,7 @@ import {
   runPreflopIfCheap,
   preflopEquityMissing,
   preflopEquityReady,
+  preflopOutstanding,
   preflopIsCheap,
   setCompareSeat,
   setCut,
@@ -724,7 +725,12 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
       // the breakdown standing and the equity never worked out. That is
       // something to ask for too, and without this the button was not there to
       // ask it with.
-      const outstanding = chrome.preflop === null || preflopEquityMissing();
+      // Every seat, not only the one being looked at: a reader who has just
+      // filled the second range and gone back to the first was being shown
+      // nothing to press, and the way to get the answer was to go to the other
+      // seat, press there, and come back.
+      const waiting = preflopOutstanding();
+      const outstanding = waiting > 0 || chrome.preflop === null || preflopEquityMissing();
       preflopButton.hidden = !outstanding && !chrome.preflopRunning;
       // The label does not get a state for "about to run itself": that lasts a
       // quarter of a second, and a button captioned with something it is not
@@ -732,14 +738,18 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
       // Where only the equity is outstanding the caption says so, or a reader
       // looking at a breakdown that is already on screen would read the button
       // as one that does nothing.
-      const onlyEquity = chrome.preflop !== null && preflopEquityMissing();
+      const onlyEquity = chrome.preflop !== null && preflopEquityMissing() && waiting <= 1;
+      // How many ranges it is about, where that is more than one: a press that
+      // is going to take four seconds rather than one should say so before it
+      // takes them.
+      const ranges = waiting > 1 ? ` · ${waiting} ranges` : "";
       preflopButton.textContent = chrome.preflopRunning
         ? `Working through ${count} flops…`
         : onlyEquity
           ? `Add equity over ${narrowed ? "the" : "all"} ${count} flops`
           : narrowed
-            ? `Calculate over the ${count} flops picked`
-            : `Calculate over all ${count} flops`;
+            ? `Calculate over the ${count} flops picked${ranges}`
+            : `Calculate over all ${count} flops${ranges}`;
       preflopButton.disabled = chrome.preflopRunning;
       preflopButton.title = cheap
         ? "This one is quick, so it runs itself once the range stops moving."

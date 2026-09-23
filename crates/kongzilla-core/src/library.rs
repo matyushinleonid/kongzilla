@@ -34,6 +34,10 @@ pub enum Stack {
     Bb60,
     /// Around 40 big blinds.
     Bb40,
+    /// Around 30 big blinds. The small blind's own open is not solved here:
+    /// that one screenshot is missing from the shoot, and a chart nobody has
+    /// is better absent than guessed at.
+    Bb30,
     /// Around 20 big blinds.
     Bb20,
     /// Six-handed NL10 cash at 100 big blinds, raked. The same game a stake
@@ -51,11 +55,12 @@ pub enum Stack {
 
 impl Stack {
     /// Every depth, deepest first.
-    pub const ALL: [Stack; 8] = [
+    pub const ALL: [Stack; 9] = [
         Self::Bb100,
         Self::Bb80,
         Self::Bb60,
         Self::Bb40,
+        Self::Bb30,
         Self::Bb20,
         Self::Nl10,
         Self::Nl25,
@@ -69,6 +74,7 @@ impl Stack {
             Self::Bb80 => "80bb",
             Self::Bb60 => "60bb",
             Self::Bb40 => "40bb",
+            Self::Bb30 => "30bb",
             Self::Bb20 => "20bb",
             Self::Nl10 => "NL10",
             Self::Nl25 => "NL25",
@@ -515,7 +521,7 @@ mod tests {
 
     #[test]
     fn every_chart_is_addressable_and_parses() {
-        // Five complete tournament depths, and three six-handed cash games with
+        // Six complete tournament depths, and three six-handed cash games with
         // no UTG1 or LJ to speak of - each with the five opens, the five
         // defences and the limp to isolate.
         //
@@ -523,7 +529,7 @@ mod tests {
         // every tournament depth, twenty-eight spots less the seven the big
         // blind already had a defence for; and in every cash game, fifteen
         // less the five it had.
-        assert_eq!(CHARTS.len(), 5 * 15 + 3 * 11 + 5 * (28 - 7) + 3 * (15 - 5));
+        assert_eq!(CHARTS.len(), 6 * 15 + 3 * 11 + 6 * (28 - 7) + 3 * (15 - 5));
         for chart in CHARTS {
             let range = chart
                 .range()
@@ -728,6 +734,46 @@ mod tests {
         let range = iso.range().expect("it parses");
         assert!(range.combo_count() > 0.0);
         assert!(iso.size_bb <= 3.0, "raising a limp is small this shallow");
+    }
+
+    #[test]
+    fn every_tournament_depth_holds_the_same_spots() {
+        // Thirty blinds arrived last and in its own order - the three-bets
+        // first, the small blind's own open an hour after everything else - so
+        // this says that what came out of that shoot is the same set of spots
+        // as the depths shot before it, rather than whatever it happened to
+        // cover.
+        for stack in Stack::ALL.into_iter().filter(|stack| stack.game() == "mtt") {
+            assert!(
+                chart_for(stack, Spot::RaiseFirstIn, Seat::Sb).is_some(),
+                "{stack:?}"
+            );
+            assert!(
+                chart_for(stack, Spot::Isolate, Seat::Sb).is_some(),
+                "{stack:?}"
+            );
+            for seat in [
+                Seat::Utg,
+                Seat::Utg1,
+                Seat::Lj,
+                Seat::Hj,
+                Seat::Co,
+                Seat::Btn,
+            ] {
+                assert!(
+                    chart_for(stack, Spot::Open, seat).is_some(),
+                    "{stack:?} {seat:?}"
+                );
+                assert!(
+                    chart_for(stack, Spot::Defend, seat).is_some(),
+                    "{stack:?} {seat:?}"
+                );
+            }
+            assert!(
+                chart_for(stack, Spot::Defend, Seat::Sb).is_some(),
+                "{stack:?}"
+            );
+        }
     }
 
     #[test]

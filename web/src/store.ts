@@ -108,6 +108,9 @@ export interface Chrome {
    * apart, so this is how a reader reaches the part they meant.
    */
   rowBand: { low: number; high: number };
+  /** What is in the middle, their bet included, and that bet. */
+  pot: number;
+  bet: number;
   /** Which slice of the range the equity slider is painting, as shares. */
   slice: { from: number; to: number };
   /** Whether a preflop pass is running. */
@@ -157,6 +160,8 @@ const FRESH: Chrome = {
   suitCell: null,
   preflop: null,
   rowBand: { low: 0, high: 100 },
+  pot: 150,
+  bet: 50,
   slice: { from: 0, to: 1 },
   preflopRunning: false,
   theme: null,
@@ -295,6 +300,20 @@ export function setCompareSeat(seat: number | null): void {
 /** Chooses which seat the per-hand equity views measure against. */
 export function setVersusSeat(seat: number | null): void {
   mutate((instance) => instance.setVersusSeat(seat ?? undefined));
+}
+
+/**
+ * Moves the opponent on: each other seat in turn, then the whole field again.
+ *
+ * One setting with more than one button on it - the output panel's and the
+ * calculator's - so the rounding lives here rather than once per button.
+ */
+export function cycleVersusSeat(): void {
+  const view = state();
+  const others = view.players.map((_, index) => index).filter((index) => index !== view.active);
+  if (others.length === 0) return;
+  const at = view.versusSeat === null ? -1 : others.indexOf(view.versusSeat);
+  setVersusSeat(at + 1 < others.length ? others[at + 1] : null);
 }
 
 /** The palette, in the order it is offered. */
@@ -592,12 +611,28 @@ export function runPreflop(): void {
   repaint();
   window.setTimeout(() => {
     try {
+      // Every seat that is waiting, not just the one being looked at. A reader
+      // comparing two ranges wants both answered, and a pass already standing
+      // costs nothing to ask for again - so this is only ever as slow as what
+      // was actually outstanding.
+      engine.preflopAll();
+      // And the seat being looked at, whether or not it was one of them. A
+      // seat with nothing in it has no pass worth running, so `preflopAll`
+      // leaves it alone - and this used to leave the panel with no pass to
+      // show, which is the state that asks for one. It asked, got nothing
+      // again, and asked again: the button and the note blinked every second
+      // and a half for as long as the reader sat there.
       chrome.preflop = JSON.parse(engine.preflop());
     } finally {
       chrome.preflopRunning = false;
       repaint();
     }
   }, 0);
+}
+
+/** How many seats are waiting on a pass over the flops. */
+export function preflopOutstanding(): number {
+  return engine.preflopOutstanding();
 }
 
 /** Whether the pass over the flops has left per-hand equity standing. */

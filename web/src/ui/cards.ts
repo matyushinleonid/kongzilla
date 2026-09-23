@@ -160,6 +160,41 @@ function cardName(index: number): string {
   return RANK_CHARS[index >> 2] + SUIT_CHARS[index & 3];
 }
 
+/**
+ * Which matrix cell a combo belongs to, mirroring the engine's layout.
+ *
+ * Beside the table that names a combo because it is the same arithmetic: both
+ * take an index apart into two cards, and two copies of that are two chances
+ * to get it wrong.
+ */
+const COMBO_CLASS: number[] = (() => {
+  const table = new Array<number>(1326);
+  for (let index = 0; index < 1326; index += 1) {
+    const [low, high] = COMBO_CARDS[index];
+    const suited = (high & 3) === (low & 3);
+    const hi = Math.max(high >> 2, low >> 2);
+    const lo = Math.min(high >> 2, low >> 2);
+    const hiCell = 12 - hi;
+    const loCell = 12 - lo;
+    table[index] = suited && hi !== lo ? hiCell * 13 + loCell : loCell * 13 + hiCell;
+  }
+  return table;
+})();
+
+/** The matrix cell one combination sits in. */
+export function comboClass(combo: number): number {
+  return COMBO_CLASS[combo] ?? 0;
+}
+
+/** Every combination that sits in one matrix cell. */
+export function classCombos(klass: number): number[] {
+  const out: number[] = [];
+  for (let combo = 0; combo < COMBO_CLASS.length; combo += 1) {
+    if (COMBO_CLASS[combo] === klass) out.push(combo);
+  }
+  return out;
+}
+
 /** A combo's name, high card first: `AhKh`. */
 export function comboName(index: number): string {
   const pair = COMBO_CARDS[index];
