@@ -243,16 +243,16 @@ const FITS_ABOVE = 640;
 /**
  * What cannot be made shorter, whatever the screen.
  *
- * The matrix is thirteen rows of cells and the board is a row of cards: neither
- * has a list to give up, so neither takes the limit. If one of them is already
- * past the bottom of the window then the page is going to scroll no matter what
- * the statistics panel does - and capping the panel then is the worst of both,
- * a list that scrolls inside a page that also scrolls.
+ * The matrix is thirteen rows of cells over a row of controls: there is no list
+ * in there to give up, so it does not take the limit. Everything else does -
+ * the statistics ladder, the flop breakdown and the output views all have
+ * something that can scroll inside them, and a panel that scrolls inside
+ * itself is better than a page that scrolls under all of them.
  */
-const UNCAPPED = ".panel-range, .panel-output";
+const UNCAPPED = ".panel-range";
 
 /** The lists that give up their height when there is a ceiling to do it under. */
-const UNDER_THE_CAP = ".stats-body, .panel-flops";
+const UNDER_THE_CAP = ".stats-body, .panel-flops, .output-body";
 
 /**
  * Tells the panels how much height they may take before they have to scroll

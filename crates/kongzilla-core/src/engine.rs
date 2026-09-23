@@ -2162,13 +2162,72 @@ impl Session {
     /// millions of classifications - so it is run on request rather than on every
     /// keystroke, which is also how Flopzilla does it.
     pub fn preflop(&self) -> PreflopBreakdown {
-        let key = self.preflop_key();
-        let standing = self.preflop_cached();
+        self.preflop_for(self.active)
+    }
+
+    /// Runs the pass for every seat that still needs one.
+    ///
+    /// One press rather than one per seat. A reader comparing two ranges wants
+    /// both answered, and the round trip - go back to the other seat, press
+    /// again, come back - is the reader doing by hand what the button is for.
+    /// Passes already standing cost nothing to ask for again, so this is only
+    /// as slow as what is actually outstanding.
+    pub fn preflop_all(&self) {
+        if !self.board.is_empty() {
+            return;
+        }
+        for seat in 0..self.players.len() {
+            if self.preflop_outstanding_for(seat) {
+                self.preflop_for(seat);
+            }
+        }
+    }
+
+    /// How many seats have a pass to run, or equity to work out alongside one.
+    pub fn preflop_outstanding(&self) -> usize {
+        if !self.board.is_empty() {
+            return 0;
+        }
+        (0..self.players.len())
+            .filter(|seat| self.preflop_outstanding_for(*seat))
+            .count()
+    }
+
+    /// Whether one seat is waiting on a pass, either half of it.
+    ///
+    /// Two halves that go stale apart: the breakdown is about the range and
+    /// the flops, the equity about that range against another one. A seat with
+    /// nothing in it is waiting for nothing.
+    fn preflop_outstanding_for(&self, seat: usize) -> bool {
+        let mine = self.narrowed_for(seat);
+        if mine.is_empty() {
+            return false;
+        }
+        let key = self.preflop_key_for(seat);
+        if !self
+            .preflop_cache
+            .borrow()
+            .iter()
+            .any(|(cached, _)| *cached == key)
+        {
+            return true;
+        }
+        let villain = self.raw_opponent_range_for(seat);
+        !villain.is_empty()
+            && self
+                .preflop_equity_with(&mine, &villain, self.blocked_for_equity_for(seat))
+                .is_none()
+    }
+
+    /// The same as [`Session::preflop`], about whichever seat asked.
+    fn preflop_for(&self, seat: usize) -> PreflopBreakdown {
+        let key = self.preflop_key_for(seat);
+        let standing = self.preflop_cached_for(seat);
         let breakdown = standing.clone().unwrap_or_else(|| {
             preflop::over_flops(
-                &self.active().range,
+                &self.players[seat].range,
                 self.off_the_deck(),
-                self.dealt_elsewhere(self.active),
+                self.dealt_elsewhere(seat),
                 self.options,
                 self.checkmarks,
                 self.flop_filter,
@@ -2178,7 +2237,7 @@ impl Session {
         // The equity views ask the same question of the same flops - what is a
         // hand worth, given a board out of this set - so they are answered here
         // rather than behind a second button and a second wait.
-        self.work_out_preflop_equity();
+        self.work_out_preflop_equity_for(seat);
 
         let mut cache = self.preflop_cache.borrow_mut();
         cache.retain(|(cached, _)| *cached != key);
@@ -2194,7 +2253,12 @@ impl Session {
     /// `None` means nobody has looked yet - at this range, on these dead cards,
     /// over these flops. The panel shows that rather than a stale answer.
     pub fn preflop_cached(&self) -> Option<PreflopBreakdown> {
-        let key = self.preflop_key();
+        self.preflop_cached_for(self.active)
+    }
+
+    /// The same, about a seat that is not necessarily the selected one.
+    fn preflop_cached_for(&self, seat: usize) -> Option<PreflopBreakdown> {
+        let key = self.preflop_key_for(seat);
         let cache = self.preflop_cache.borrow();
         let (_, breakdown) = cache.iter().find(|(cached, _)| *cached == key)?;
         // The checkmarks may have moved since; the shape has not.
@@ -2228,12 +2292,17 @@ impl Session {
     /// combination inside the calculation, which is more exact than crossing
     /// cards out in advance.
     fn blocked_for_equity(&self) -> CardSet {
-        let versus = self.versus_seat().filter(|seat| *seat != self.active);
+        self.blocked_for_equity_for(self.active)
+    }
+
+    /// The same, about a seat that is not necessarily the selected one.
+    fn blocked_for_equity_for(&self, mine: usize) -> CardSet {
+        let versus = self.versus_seat().filter(|seat| *seat != mine);
         let mut blocked = self.board.mask().union(self.dead);
         for (index, player) in self.players.iter().enumerate() {
             // With nobody singled out, the opponent is every other seat, so
             // there is no third party left to block.
-            let inside = index == self.active || versus.is_none_or(|seat| seat == index);
+            let inside = index == mine || versus.is_none_or(|seat| seat == index);
             if inside {
                 continue;
             }
@@ -2247,7 +2316,17 @@ impl Session {
     /// The preflop equity of one range against another, if it has been worked
     /// out and still says something about the ranges as they are.
     fn preflop_equity_for(&self, hero: &Range, villain: &Range) -> Option<ComboEquity> {
-        let wanted = self.preflop_equity_key(hero, villain);
+        self.preflop_equity_with(hero, villain, self.blocked_for_equity())
+    }
+
+    /// The same, for a pass whose dead cards are another seat's.
+    fn preflop_equity_with(
+        &self,
+        hero: &Range,
+        villain: &Range,
+        blocked: CardSet,
+    ) -> Option<ComboEquity> {
+        let wanted = self.preflop_equity_key(hero, villain, blocked);
         let cache = self.preflop_equity.borrow();
         let (_, equity) = cache.iter().find(|(cached, _)| *cached == wanted)?;
         Some(equity.clone())
@@ -2258,9 +2337,9 @@ impl Session {
     ///
     /// The pair rather than the seat, so that looking at the same two ranges
     /// from the other side finds the answer that is already there.
-    fn preflop_equity_key(&self, hero: &Range, villain: &Range) -> u64 {
+    fn preflop_equity_key(&self, hero: &Range, villain: &Range, blocked: CardSet) -> u64 {
         self.fingerprint(&[hero, villain], 9)
-            ^ self.blocked_for_equity().bits()
+            ^ blocked.bits()
             ^ self
                 .flop_filter
                 .bits()
@@ -2269,8 +2348,14 @@ impl Session {
     }
 
     /// Files one direction of a pass.
-    fn keep_preflop_equity(&self, hero: &Range, villain: &Range, value: ComboEquity) {
-        let key = self.preflop_equity_key(hero, villain);
+    fn keep_preflop_equity(
+        &self,
+        hero: &Range,
+        villain: &Range,
+        blocked: CardSet,
+        value: ComboEquity,
+    ) {
+        let key = self.preflop_equity_key(hero, villain, blocked);
         let mut cache = self.preflop_equity.borrow_mut();
         cache.retain(|(cached, _)| *cached != key);
         // Both directions of a few pairs, and no more: each is a megabyte of
@@ -2281,30 +2366,30 @@ impl Session {
         cache.push((key, value));
     }
 
-    /// Runs the per-hand equity over the flops the ticks leave.
+    /// Runs the per-hand equity over the flops the ticks leave, for one seat.
     ///
     /// Both directions, because the graph draws both curves - and because the
     /// other seat's question is this one backwards, so filing both is what
     /// lets switching seats find the answer already worked out.
-    fn work_out_preflop_equity(&self) {
+    fn work_out_preflop_equity_for(&self, seat: usize) {
         if !self.board.is_empty() {
             return;
         }
-        let mine = self.effective_range();
-        let villain = self.opponent_range().unwrap_or_default();
+        let mine = self.narrowed_for(seat);
+        let villain = self.raw_opponent_range_for(seat);
         if mine.is_empty() || villain.is_empty() {
             return;
         }
-        let dead = self.blocked_for_equity();
+        let dead = self.blocked_for_equity_for(seat);
         let filter = self.flop_filter;
-        if self.preflop_equity_for(&mine, &villain).is_none() {
+        if self.preflop_equity_with(&mine, &villain, dead).is_none() {
             if let Some(ours) = equity::equity_by_combo_preflop(&mine, &villain, dead, filter) {
-                self.keep_preflop_equity(&mine, &villain, ours);
+                self.keep_preflop_equity(&mine, &villain, dead, ours);
             }
         }
-        if self.preflop_equity_for(&villain, &mine).is_none() {
+        if self.preflop_equity_with(&villain, &mine, dead).is_none() {
             if let Some(theirs) = equity::equity_by_combo_preflop(&villain, &mine, dead, filter) {
-                self.keep_preflop_equity(&villain, &mine, theirs);
+                self.keep_preflop_equity(&villain, &mine, dead, theirs);
             }
         }
     }
@@ -2323,7 +2408,12 @@ impl Session {
     /// What a pass over all the flops depends on. Not the checkmarks: those
     /// pick what to ask of the answer rather than changing it.
     fn preflop_key(&self) -> u64 {
-        let mut hash = self.fingerprint(&[&self.active().range], 7);
+        self.preflop_key_for(self.active)
+    }
+
+    /// The same, about a seat that is not necessarily the selected one.
+    fn preflop_key_for(&self, seat: usize) -> u64 {
+        let mut hash = self.fingerprint(&[&self.players[seat].range], 7);
         hash ^= self.off_the_deck().bits();
         hash = hash.wrapping_mul(0x100_0000_01b3);
         hash ^= u64::from(self.options.one_card_backdoor_flushdraw);
