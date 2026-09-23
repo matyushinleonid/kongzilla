@@ -12,6 +12,7 @@
  */
 
 import {
+  bandShares,
   cellCombos,
   chrome,
   classLabels,
@@ -187,13 +188,20 @@ export function renderMatrix(frame: HTMLElement): void {
 
   // Everything else is about the range and the board, so it is redrawn when
   // those move and not when the pointer does.
-  const from = `${revision()}/${chrome.hovered}/${view.filtersEnabled}/${chrome.visible}`;
+  const from = `${revision()}/${chrome.hovered}/${chrome.hoveredBand}/${view.filtersEnabled}/${chrome.visible}`;
   if (from === before.from) return;
   before.from = from;
 
   // Hovering a statistic is a question being asked right now, so it wins the
   // glow; the cut keeps its own marker underneath either way.
-  const lit = chrome.hovered !== null ? highlight(chrome.hovered) : null;
+  // A rung of the ladder, or a band of equity: two ways of pointing at a part
+  // of the range, and the matrix lights whichever one is being pointed at.
+  const lit =
+    chrome.hovered !== null
+      ? highlight(chrome.hovered)
+      : chrome.hoveredBand !== null
+        ? bandShares(chrome.hoveredBand)
+        : null;
 
   for (let index = 0; index < 169; index += 1) {
     const cell = cells[index] as HTMLElement;

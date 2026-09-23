@@ -1,7 +1,9 @@
 /** The starting-hand panel: the matrix, the sliders, the quick buttons, the text. */
 
 import {
+  bandCombos,
   chrome,
+  equityBuckets,
   library,
   markColour,
   mutate,
@@ -764,19 +766,26 @@ export function createRangePanel(): { element: HTMLElement; render: () => void }
  */
 function renderEditStrip(strip: HTMLElement): void {
   const index = chrome.editing;
-  if (index === null) {
+  const band = chrome.editingBand;
+  if (index === null && band === null) {
     strip.hidden = true;
     strip.replaceChildren();
     return;
   }
-  const def = statDefs.find((candidate) => candidate.index === index);
-  const hands = statCombos(index);
+  // A rung of the ladder or a band of equity: two ways of naming a part of the
+  // range, and the same row of hands underneath either.
+  const def = index === null ? null : statDefs.find((candidate) => candidate.index === index);
+  const named =
+    index !== null
+      ? (def?.label ?? "")
+      : (equityBuckets().find((bucket) => bucket.key === band)?.label ?? "");
+  const hands = index !== null ? statCombos(index) : bandCombos(band!);
   strip.hidden = false;
 
   const label = document.createElement("span");
   label.className = "field-label";
   const colour = state().colour;
-  label.textContent = `${def?.label ?? ""} — ${hands.length} combos, painting ${colour}`;
+  label.textContent = `${named} — ${hands.length} combos, strongest first, painting ${colour}`;
 
   const close = document.createElement("button");
   close.type = "button";
@@ -785,6 +794,7 @@ function renderEditStrip(strip: HTMLElement): void {
   close.title = "Close (shift-click the row again)";
   close.addEventListener("click", () => {
     chrome.editing = null;
+    chrome.editingBand = null;
     repaint();
   });
 

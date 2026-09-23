@@ -120,6 +120,15 @@ export function createWorkspace(columns: Column[]): { element: HTMLElement; rend
   }
 
   /*
+   * The widest the starting-hands column may be before its matrix stops
+   * fitting. Kept between renders because it is worked out from a measurement,
+   * and the measurement is of a panel already wearing the last answer. Kept
+   * per workspace rather than per module, because two of them on one page are
+   * two different windows' worth of room.
+   */
+  let ceiling = Number.POSITIVE_INFINITY;
+
+  /*
    * Settle the matrix, then tell the panels what room is left.
    *
    * Settle, because the two measurements feed each other: narrowing the column
@@ -163,6 +172,32 @@ export function createWorkspace(columns: Column[]): { element: HTMLElement; rend
   // alone left the columns at the width they were chosen for, which on a
   // narrowed window put the last one off the right-hand edge.
   window.addEventListener("resize", render);
+
+  /*
+   * Measure again once the window has finished changing size.
+   *
+   * Going full screen is not one size change but a run of them: the window
+   * grows over an animation the browser owns, and every measurement taken
+   * while it is still growing is a measurement of a window that is about to be
+   * a different size. A single pass on the event therefore fits the page to
+   * some size between the two, which on the way in leaves the panels short of
+   * the screen and on the way out leaves them hanging off it.
+   *
+   * So the fit is taken again a few times over the next third of a second,
+   * which is longer than the animation and short enough not to be seen. Cheap
+   * enough to do this way: a pass that finds nothing to change writes nothing.
+   */
+  const settleSize = () => {
+    render();
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(render);
+    for (const delay of [120, 320]) window.setTimeout(render, delay);
+  };
+  document.addEventListener("fullscreenchange", settleSize);
+  // Where a browser keeps the visible part of the page separately - a phone
+  // with a keyboard up, a desktop zoomed in - that is the box the panels have
+  // to fit inside, and it changes without the window changing.
+  window.visualViewport?.addEventListener("resize", render);
+
   // The first render measures a page the browser has not laid out yet, so what
   // it works out is about the page as it was a moment ago - and on a laptop
   // that is the difference between fitting and not. One more pass once there
@@ -171,14 +206,6 @@ export function createWorkspace(columns: Column[]): { element: HTMLElement; rend
 
   return { element: workspace, render };
 }
-
-/**
- * The widest the starting-hands column may be before its matrix stops fitting.
- *
- * Kept between renders because it is worked out from a measurement, and the
- * measurement is of a panel that is already wearing the last answer.
- */
-let ceiling = Number.POSITIVE_INFINITY;
 
 /**
  * Brings the matrix down to what the window has room for.
@@ -214,7 +241,12 @@ function fitMatrix(workspace: HTMLElement): number {
   // and the ceiling comes out the same whether or not it is already on, which
   // is what stops it chasing itself: shrink, fit, un-shrink, repeat.
   const shape = grid.width / grid.height;
-  const rest = whole.height - grid.height;
+  // Everything in the panel that is not the matrix - except the strip of
+  // combinations, which is a thing that opens and shuts under the reader's
+  // hand. Counting it made the matrix narrow the moment they shift-clicked a
+  // row and widen again when they closed it, so the panel they were working in
+  // changed size while they worked in it.
+  const rest = whole.height - grid.height - stripHeight(panel);
   const beside = whole.width - grid.width;
   return Math.max(FLOORS.range, Math.floor((roomBelow(workspace) - rest) * shape + beside));
 }
@@ -288,11 +320,32 @@ function capPanels(workspace: HTMLElement): void {
   // height and took the page with it.
   const limit = Math.max(320, Math.floor(Math.max(room, fixed)));
   workspace.style.setProperty("--panel-max", `${limit}px`);
+  // And what is left over for the strip of combinations, which takes whatever
+  // room the panel is not using rather than pushing the page down. Never less
+  // than two rows of chips: a strip too short to hold anything is worse than
+  // one the page has to scroll a little for.
+  const slack = room - (fixed - Math.max(0, stripHeight(workspace)));
+  workspace.style.setProperty("--strip-max", `${Math.round(Math.min(128, Math.max(64, slack)))}px`);
   workspace.classList.add("capped");
   // A ceiling nothing reaches is worse than none: it leaves boxes that are
   // scroll containers with nothing to scroll, and those swallow the gesture
   // that would have scrolled the page.
   if (!bites(workspace)) uncap(workspace);
+}
+
+/**
+ * How much height the strip of combinations is taking, or nought when shut.
+ *
+ * Its margins as well as its box: they are the space it takes from the panel,
+ * and leaving them out left the matrix moving by the few pixels they come to.
+ */
+function stripHeight(within: HTMLElement): number {
+  const strip = within.querySelector<HTMLElement>(".edit-strip");
+  if (!strip || strip.hidden) return 0;
+  const style = getComputedStyle(strip);
+  const margins =
+    (Number.parseFloat(style.marginTop) || 0) + (Number.parseFloat(style.marginBottom) || 0);
+  return strip.getBoundingClientRect().height + margins;
 }
 
 /** Whether the ceiling is doing anything - is any list actually scrolling under it? */

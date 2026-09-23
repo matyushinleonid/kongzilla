@@ -270,22 +270,41 @@ fn by_combo(
     })
 }
 
-/// How each remaining card would change a hand's equity against a range.
+/// How each remaining card would change one range's equity against another.
 ///
 /// Flopzilla calls this hotness and colours the deck with it: red where the card
-/// helps the range, green where it helps the hand. Needs a flop or a turn, so
-/// there is a card still to come.
-pub fn hotness(hero: Combo, villain: &Range, board: &Board, dead: CardSet) -> Option<Vec<HotCard>> {
+/// helps them, green where it helps you. Needs a flop or a turn, so there is a
+/// card still to come.
+///
+/// A hand is a range with one combination in it and asks the same question, so
+/// there is one function rather than two.
+pub fn hotness(
+    hero: &Range,
+    villain: &Range,
+    board: &Board,
+    dead: CardSet,
+) -> Option<Vec<HotCard>> {
     if board.len() < 3 || board.len() >= Board::MAX {
         return None;
     }
-    let used = board.mask().union(dead).union(hero.mask());
+    // The cards nobody can be dealt: the board, the dead ones, and any card
+    // the hero holds in every hand it has. That last one is what keeps a
+    // single hand honest - the ace in your hand is not coming - while a range
+    // of more than one blocks nothing, since a card one of its hands holds is
+    // still a card to come for the rest.
+    let mut always = CardSet::FULL;
+    for (combo, weight) in hero.iter() {
+        if weight > 0.0 {
+            always = always.intersection(combo.mask());
+        }
+    }
+    let used = board.mask().union(dead).union(always);
     let mut cards: Vec<HotCard> = Vec::with_capacity(NUM_CARDS);
     for card in CardSet::FULL.difference(used).iter() {
         let Some(next) = board.with_card(card) else {
             continue;
         };
-        if let Some(report) = hand_vs_range(hero, villain, &next, dead) {
+        if let Some(report) = range_vs_range(hero, villain, &next, dead) {
             cards.push(HotCard {
                 card: card_name(card),
                 equity: report.players[0].equity,
@@ -1134,11 +1153,13 @@ mod tests {
     #[test]
     fn hotness_ranks_the_cards_the_hand_wants() {
         let board = Board::parse("Kh 7h 2c").unwrap();
-        let hero = Combo::parse("AhQh").unwrap();
+        let mut hero = Range::empty();
+        hero.set(Combo::parse("AhQh").unwrap(), 1.0);
         let villain = Range::parse("KQs,KJs,QQ,JJ").unwrap();
-        let cards = hotness(hero, &villain, &board, CardSet::EMPTY).unwrap();
+        let cards = hotness(&hero, &villain, &board, CardSet::EMPTY).unwrap();
 
-        // Every card that can still come, minus the board and the hand.
+        // Every card that can still come, minus the board and the hand: one
+        // hand holds two of them, and a card in your hand is not coming.
         assert_eq!(
             cards.len(),
             47,
@@ -1159,8 +1180,8 @@ mod tests {
 
         // No card left to come means no hotness.
         let river = Board::parse("Kh 7h 2c 3d 4s").unwrap();
-        assert!(hotness(hero, &villain, &river, CardSet::EMPTY).is_none());
-        assert!(hotness(hero, &villain, &Board::empty(), CardSet::EMPTY).is_none());
+        assert!(hotness(&hero, &villain, &river, CardSet::EMPTY).is_none());
+        assert!(hotness(&hero, &villain, &Board::empty(), CardSet::EMPTY).is_none());
     }
 
     #[test]

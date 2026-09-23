@@ -1397,11 +1397,20 @@ impl Session {
     /// This is what greys a cell out: nothing to do with colour, only with
     /// whether the hands are still in the range once the filters have run.
     pub fn class_passing(&self) -> [f32; NUM_CLASSES] {
-        let narrowed = self.narrowed();
+        self.class_passing_for(self.active)
+    }
+
+    /// The same, about a seat that is not necessarily the selected one: the
+    /// thumbnails in the strip draw every seat, filters and all.
+    pub fn class_passing_for(&self, seat: usize) -> [f32; NUM_CLASSES] {
+        let Some(player) = self.players.get(seat) else {
+            return [0.0; NUM_CLASSES];
+        };
+        let narrowed = self.narrowed_for(seat);
         let mut passing = [0.0f32; NUM_CLASSES];
         let mut held = [0.0f32; NUM_CLASSES];
         for combo in self.cache.live().iter() {
-            let weight = self.active().range.get(combo);
+            let weight = player.range.get(combo);
             if weight <= 0.0 {
                 continue;
             }
@@ -2109,6 +2118,40 @@ impl Session {
         breakdown::highlight(&self.effective_range(), &self.cache, mask)
     }
 
+    /// The same, for one band of equity rather than one statistic.
+    ///
+    /// What share of each cell is worth that much against the other range.
+    /// Empty where there is nothing to measure against, which is the honest
+    /// answer: a band nobody can work out lights nothing rather than lighting
+    /// everything.
+    pub fn band_shares(&self, band: EquityBand) -> [f32; NUM_CLASSES] {
+        let mut share = [0.0f32; NUM_CLASSES];
+        let Some(equity) = self.equity_by_combo() else {
+            return share;
+        };
+        let mine = self.effective_range();
+        let mut matched = [0.0f32; NUM_CLASSES];
+        let mut held = [0.0f32; NUM_CLASSES];
+        for combo in self.cache.live().iter() {
+            let weight = mine.get(combo);
+            if weight <= 0.0 {
+                continue;
+            }
+            let class = combo.class().index() as usize;
+            held[class] += weight;
+            let value = equity.equity[combo.index() as usize];
+            if value >= 0.0 && EquityBand::of(value) == band {
+                matched[class] += weight;
+            }
+        }
+        for index in 0..NUM_CLASSES {
+            if held[index] > 0.0 {
+                share[index] = matched[index] / held[index];
+            }
+        }
+        share
+    }
+
     /// Which statistics count as the range having hit, in the preflop mode.
     pub fn checkmarks(&self) -> StatMask {
         self.checkmarks
@@ -2607,24 +2650,26 @@ impl Session {
         self.players.get(seat).and_then(|player| player.hand)
     }
 
-    /// How each remaining card would change the hand's equity.
+    /// How each remaining card would change the open range's equity.
     ///
-    /// The hand is the one the active seat holds, when it holds one. Failing
-    /// that it is the only hand at the table, wherever it is sitting: dealing
-    /// a hand no longer moves the reader onto it, so insisting they go there
-    /// first would mean a view that says "deal a hand" to somebody who just
-    /// did. Several hands is a question this cannot answer, and it says so by
-    /// answering nothing.
+    /// The range the reader has open, whatever it holds. A hand is a range of
+    /// one and asks the same question - which card helps me - so there is no
+    /// need to treat it apart; and reading somebody else's hand because one
+    /// was dealt somewhere was how this came to answer about a seat the reader
+    /// was not looking at.
     pub fn hotness(&self) -> Option<Vec<HotCard>> {
-        let (seat, hand) = self.hand_in_question()?;
-        // Measured against everyone but the seat the hand is sitting at. Not
-        // everyone but the *selected* seat: with the reader on their range and
-        // the hand dealt beside it, that field held the hand itself, and a hand
-        // against itself is a matchup that cannot be dealt - which came out as
-        // a column of noughts.
-        let villain = self.raw_opponent_range_for(seat);
+        let mine = self.effective_range();
+        if mine.is_empty() {
+            return None;
+        }
+        let villain = self.raw_opponent_range_for(self.active);
+        // The same removal the equity views use: cards held by seats that are
+        // not in this matchup are gone, and the two that are keep their own.
+        // Crossing out the opponent's hand as well would leave it with nothing
+        // to be dealt, and every card would come back worth nothing.
+        let dead = self.blocked_for_equity_for(self.active);
         (!villain.is_empty())
-            .then(|| equity::hotness(hand, &villain, &self.board, self.dealt_elsewhere(seat)))
+            .then(|| equity::hotness(&mine, &villain, &self.board, dead))
             .flatten()
     }
 
@@ -3615,45 +3660,59 @@ mod tests {
     }
 
     #[test]
-    fn hotness_finds_the_hand_wherever_it_is_sitting() {
+    fn hotness_is_about_the_seat_the_reader_has_open() {
         let mut session = session_on("Kh 7d 2c", "22+,A2s+");
-        assert!(session.hotness().is_none(), "no hand, nothing to say");
+        assert!(session.hotness().is_none(), "nothing to measure against");
 
-        // Dealt at a seat of its own, and the reader left on their range: the
-        // view is about that hand all the same, because there is only one.
+        // A hand dealt at a seat of its own, and the reader left on their
+        // range: the question is what the cards to come do for *their* range,
+        // which is the one they are looking at.
         let hand = Combo::parse("AhKs").unwrap();
         session.add_hand(hand).expect("room at the table");
         assert_eq!(session.active_index(), 0, "still on the range");
-        assert!(session.lone_combo().is_none(), "which is not a hand");
-        let cards = session.hotness().expect("the hand at the table");
-        assert_eq!(cards.len(), 52 - 3 - 2, "every card still to come");
-
-        // Going to the hand asks the same question and gets the same answer.
-        session.set_active(2);
+        let mine = session.hotness().expect("something to measure against");
         assert_eq!(
-            session.hotness().map(|cards| cards.len()),
-            Some(cards.len())
+            mine.len(),
+            52 - 3 - 2,
+            "the flop, and the two cards somebody at the table is holding"
         );
-
-        // The hand is measured against the other seats, not against the seat
-        // the reader happens to be looking at - which would put the hand in its
-        // own opposition, a matchup that cannot be dealt, and every card would
+        // Measured against the other seats rather than against the seat the
+        // reader is looking at - which would put a range in its own
+        // opposition, a matchup that cannot be dealt, and every card would
         // come out worth exactly nothing.
-        session.set_active(0);
-        let from_the_range = session.hotness().expect("the hand at the table");
         assert!(
-            from_the_range.iter().any(|card| card.equity.abs() > 1e-6),
-            "every card came out at nought, so the hand was facing itself"
+            mine.iter().any(|card| card.equity.abs() > 1e-6),
+            "every card came out at nought, so the range was facing itself"
         );
 
-        // Two hands is a question with no answer: which of them?
-        session
-            .add_hand(Combo::parse("QdQs").unwrap())
-            .expect("room");
+        // Going to the hand asks the hand's question instead: the same cards
+        // to come, read from the other side of the table.
+        session.set_active(2);
+        let theirs = session.hotness().expect("the hand");
+        assert_eq!(theirs.len(), mine.len());
         assert!(
-            session.hotness().is_none(),
-            "two hands, and nobody said which"
+            theirs
+                .iter()
+                .zip(&mine)
+                .any(|(a, b)| (a.equity - b.equity).abs() > 1e-3),
+            "two seats, two different answers"
         );
+
+        // Two seats, one pot: what a card is worth to one of them is what it
+        // costs the other.
+        for card in &theirs {
+            let ours = mine
+                .iter()
+                .find(|other| other.card == card.card)
+                .expect("the same card, read from the other side");
+            assert!(
+                (ours.equity + card.equity - 1.0).abs() < 1e-3,
+                "{}: {:.4} and {:.4} do not add up",
+                card.card,
+                ours.equity,
+                card.equity
+            );
+        }
     }
 
     #[test]

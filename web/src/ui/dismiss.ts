@@ -31,8 +31,9 @@ export function dismissOnPress(target: EventTarget | null): void {
     chrome.suitPeek = null;
     changed = true;
   }
-  if (chrome.editing !== null && !target.closest(INSIDE.editing)) {
+  if ((chrome.editing !== null || chrome.editingBand !== null) && !target.closest(INSIDE.editing)) {
     chrome.editing = null;
+    chrome.editingBand = null;
     changed = true;
   }
   if (changed) repaint();
@@ -54,8 +55,9 @@ export function dismissOne(closeSheet: () => boolean): boolean {
     return true;
   }
 
-  if (chrome.editing !== null) {
+  if (chrome.editing !== null || chrome.editingBand !== null) {
     chrome.editing = null;
+    chrome.editingBand = null;
     repaint();
     return true;
   }

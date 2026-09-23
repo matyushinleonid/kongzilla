@@ -84,7 +84,17 @@ export function createCalculator(): { element: HTMLElement; render: () => void }
   top.className = "row calc-row";
   const potField = field("Pot", "calc-pot", "What is in the middle, their bet included");
   const betField = field("Bet", "calc-bet", "The bet this range is facing");
-  top.append(potField.label, betField.label);
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "btn calc-clear";
+  clear.textContent = "Clear";
+  clear.title = "Empty both boxes";
+  clear.addEventListener("click", () => {
+    chrome.pot = 0;
+    chrome.bet = 0;
+    repaint();
+  });
+  top.append(potField.label, betField.label, clear);
 
   const below = document.createElement("div");
   below.className = "row calc-row";
@@ -156,8 +166,11 @@ export function createCalculator(): { element: HTMLElement; render: () => void }
       [potField.input, chrome.pot],
       [betField.input, chrome.bet],
     ] as const) {
-      if (document.activeElement !== input) input.value = String(value);
+      // Nought is the box being empty rather than a pot of nothing: the panel
+      // starts with no spot in it, and says nothing until it is given one.
+      if (document.activeElement !== input) input.value = value > 0 ? String(value) : "";
     }
+    clear.hidden = chrome.pot <= 0 && chrome.bet <= 0;
 
     const others = view.players.map((_, index) => index).filter((index) => index !== view.active);
     versus.hidden = others.length === 0;

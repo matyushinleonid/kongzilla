@@ -6,6 +6,9 @@
 import { chrome, equityByCombo, mutate, state, repaint } from "../store";
 import { RANKS, SUITS, cardButton, seatName, thumbnail } from "./cards";
 
+/** What each light is about, in the order the streets come. */
+const STREETS = ["Flop", "Turn", "River"];
+
 export function createTopStrip(): { element: HTMLElement; render: () => void } {
   const strip = document.createElement("div");
   strip.className = "topstrip";
@@ -13,7 +16,7 @@ export function createTopStrip(): { element: HTMLElement; render: () => void } {
   // ----- seats --------------------------------------------------------------
   const seats = document.createElement("div");
   seats.className = "seats";
-  const thumbs: Array<{ element: HTMLElement; paint: (weights: number[]) => void }> = [];
+  const thumbs: Array<ReturnType<typeof thumbnail>> = [];
   const seatCards: HTMLElement[] = [];
 
   // ----- dead cards ---------------------------------------------------------
@@ -90,10 +93,18 @@ export function createTopStrip(): { element: HTMLElement; render: () => void } {
         const thumb = thumbnail();
         const badge = document.createElement("span");
         badge.className = "seat-badge";
+        const lights = document.createElement("span");
+        lights.className = "seat-streets";
+        for (let street = 0; street < 3; street += 1) {
+          const light = document.createElement("i");
+          light.className = "street-light";
+          lights.append(light);
+        }
         const bar = document.createElement("span");
         bar.className = `seat-bar seat-${index}`;
         bar.style.setProperty("--seat", `var(--seat-${index})`);
-        card.append(thumb.element, badge, bar);
+        card.append(thumb.element, badge, lights, bar);
+        card.classList.add("has-lights");
         card.addEventListener("click", () => mutate((engine) => engine.setActive(index)));
         // A cross, not a shift-click. Dropping a range is the one action here
         // that cannot be undone, and hiding it behind a modifier makes it both
@@ -150,7 +161,24 @@ export function createTopStrip(): { element: HTMLElement; render: () => void } {
       const copy = card.querySelector<HTMLButtonElement>(".seat-copy");
       if (copy) copy.hidden = player.hand !== null || view.players.length >= 6;
       card.title = `${seatName(player)}: ${player.combos.toFixed(0)} combos, ${player.percent.toFixed(1)}%`;
-      thumbs[index].paint(player.classWeights);
+      thumbs[index].paint(player.classWeights, player.classPassing);
+
+      /*
+       * The streets this seat has filtered, one light each.
+       *
+       * As many lights as there are streets to filter - one on a flop, three
+       * by the river - so the row says how far the hand has got as well as how
+       * far this range has been taken through it. Lit where the filter is on.
+       */
+      const lights = card.querySelector<HTMLElement>(".seat-streets")!;
+      lights.hidden = view.streetsDealt === 0 || player.hand !== null;
+      Array.from(lights.children).forEach((light, street) => {
+        const there = street < view.streetsDealt;
+        (light as HTMLElement).hidden = !there;
+        const on = player.streets[street] === true;
+        light.classList.toggle("on", on);
+        (light as HTMLElement).title = `${STREETS[street]}: ${on ? "filtered" : "not filtered"}`;
+      });
       const badge = card.querySelector(".seat-badge")!;
       const equity = seatEquity(index);
       badge.textContent = equity ? `${(equity.equity * 100).toFixed(3)}%` : seatName(player);

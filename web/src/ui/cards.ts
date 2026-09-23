@@ -123,7 +123,10 @@ function rankGlyph(card: string): DocumentFragment {
 }
 
 /** A miniature 13x13 matrix, used for the seat thumbnails. */
-export function thumbnail(): { element: HTMLElement; paint: (weights: number[]) => void } {
+export function thumbnail(): {
+  element: HTMLElement;
+  paint: (weights: number[], passing?: number[]) => void;
+} {
   const element = document.createElement("div");
   element.className = "thumb-matrix";
   const cells: HTMLElement[] = [];
@@ -132,11 +135,20 @@ export function thumbnail(): { element: HTMLElement; paint: (weights: number[]) 
     cells.push(cell);
     element.append(cell);
   }
-  const paint = (weights: number[]) => {
+  /*
+   * Two things at once: how much of a cell the range holds, and how much of
+   * that its own street filters have left. The second fades the first, so a
+   * glance at the strip says not only what a seat was given but what it is
+   * still playing - which is the thing that changes as a hand goes on.
+   */
+  const paint = (weights: number[], passing?: number[]) => {
     cells.forEach((cell, index) => {
       const weight = weights[index] ?? 0;
+      const left = passing ? (passing[index] ?? 0) : 1;
       cell.classList.toggle("on", weight > 0);
+      cell.classList.toggle("filtered", weight > 0 && left < 0.999);
       cell.style.setProperty("--weight", weight.toFixed(3));
+      cell.style.setProperty("--passing", left.toFixed(3));
     });
   };
   return { element, paint };

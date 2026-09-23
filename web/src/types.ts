@@ -47,6 +47,10 @@ export interface PlayerView {
   percent: number;
   /** Mean weight per matrix cell, for the seat's thumbnail. */
   classWeights: number[];
+  /** What share of each cell this seat's own street filters leave. */
+  classPassing: number[];
+  /** Which streets this seat has filtered, flop first. */
+  streets: boolean[];
   /** Where the range slider's two handles sit, as percentages of the deck. */
   sliderLow: number;
   sliderHigh: number;

@@ -16,7 +16,7 @@ help:
 	@echo "make check     everything CI runs: format, lint, test, build"
 	@echo "make format    reformat Rust and web sources"
 	@echo "make wasm      build the engine into web/wasm for a local toolchain"
-	@echo "make browser   check fit, feel, touch and colour in a real browser"
+	@echo "make browser   check fit, feel, touch, colour and grip in a real browser"
 	@echo "make bench-web what the engine costs in the browser"
 	@echo "make charts     re-read the solver screenshots into the preflop library"
 	@echo "make bench      time the preflop pass over all 22,100 flops"
@@ -75,6 +75,7 @@ browser: dist standalone
 	$(PUPPETEER) scripts/browser/feel.mjs
 	$(PUPPETEER) scripts/browser/touch.mjs
 	$(PUPPETEER) scripts/browser/theme.mjs
+	$(PUPPETEER) scripts/browser/controls.mjs
 	$(PUPPETEER) scripts/browser/standalone.mjs
 
 # What the engine costs in the browser rather than in Rust. Prints rather than
