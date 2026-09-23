@@ -1258,8 +1258,9 @@ function hotnessView(): Node[] {
   if (!cards) {
     return [
       note(
-        "Needs a dealt hand on this seat, and a flop or turn so there is a card still to come. " +
-          "Deal one from the dead-card panel.",
+        "Needs something to measure against, and a flop or a turn so there is a card still to " +
+          "come. It is about the range on this seat - a dealt hand is one of those, and reads " +
+          "the same way.",
       ),
     ];
   }

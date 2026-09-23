@@ -510,7 +510,9 @@ body {
    one. */
 .seat {
   position: relative;
-  padding: 3px 3px 6px;
+  /* Room along the foot for the seat's colour bar and, above it, the lights
+     that say which streets this range has been filtered on. */
+  padding: 3px 3px 14px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -547,7 +549,48 @@ body {
   background: var(--panel-sunken);
 }
 
-.seat.is-hand .seat-badge {
+/*
+ * How far this range has been taken through the hand.
+ *
+ * One light per street the board has reached, under the thumbnail on the left,
+ * lit where that street's filter is on. Small on purpose: it is a thing to
+ * catch out of the corner of an eye while looking at the thumbnail above it,
+ * not a control.
+ */
+.seat-streets {
+  /* Above the seat's own colour bar, which sits along the very bottom. */
+  position: absolute;
+  left: 4px;
+  bottom: 7px;
+  z-index: 1;
+  display: flex;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.seat-streets[hidden] {
+  display: none;
+}
+
+.street-light {
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--panel);
+  border-radius: 50%;
+  background: var(--warn);
+  opacity: 0.55;
+}
+
+.street-light[hidden] {
+  display: none;
+}
+
+.street-light.on {
+  background: var(--go);
+  opacity: 1;
+}
+
+.seat-badge {
   font-weight: 700;
 }
 
@@ -596,9 +639,23 @@ body {
 
 /* Part weight is part colour, faded towards the empty cell beside it rather
    than towards a light grey of its own: mixing into a fixed pale colour drew
-   near-white cells across a dark thumbnail. */
+   near-white cells across a dark thumbnail.
+   Filters fade it the same way, so a thumbnail shows what the seat is still
+   playing rather than what was typed into it. */
 .thumb-matrix i.on {
-  background: color-mix(in srgb, var(--select) calc(var(--weight) * 100%), var(--track));
+  background: color-mix(
+    in srgb,
+    var(--select) calc(var(--weight) * var(--passing, 1) * 100%),
+    var(--track)
+  );
+}
+
+/* A cell the filters have emptied keeps a mark of having been there: the range
+   held it, and a thumbnail that simply forgot would read as a narrower range
+   rather than a filtered one. */
+.thumb-matrix i.on.filtered {
+  outline: 1px solid color-mix(in srgb, var(--select) 45%, transparent);
+  outline-offset: -1px;
 }
 
 .seat-badge {
@@ -1168,6 +1225,13 @@ body {
   opacity: 0.75;
 }
 
+/* Except with no board, where there is nothing to open: a rung before the flop
+   is a share of hand-flop pairs rather than a set of hands, so there are no
+   combinations to show and the offer would be one the row cannot keep. */
+.panel-stats.preflop-mode .shift-hint {
+  display: none;
+}
+
 .stat-row .shift-hint {
   top: 50%;
   right: 1px;
@@ -1231,13 +1295,22 @@ body {
   border-radius: 3px;
 }
 
+/*
+ * Centred on the bar, which is also what makes it grabbable.
+ *
+ * The margin is measured from the top of the runnable track, and the track
+ * sits 6px down a box 18px tall - so an 11px thumb wants -2.5px to straddle
+ * it. At +3.5px it was drawn six pixels low and half of it hung outside the
+ * box, where the browser clips it: the slider only answered a press in the
+ * bottom few pixels, and aiming at the thumb you could see did nothing at all.
+ */
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   pointer-events: auto;
   width: 11px;
   height: 11px;
-  margin-top: 3.5px;
+  margin-top: -2.5px;
   border-radius: 50%;
   border: 1px solid #ffffff;
   background: var(--accent);
@@ -1477,7 +1550,16 @@ body {
  * Which part of a row a press paints. Two handles on one track, laid over each
  * other the way the range slider's are.
  */
+/* Fixed tracks rather than a flexible row, for the reason the slider under it
+   is laid out the same way: the readout beside it changes length as it moves
+   and the cross appears the moment it is narrowed, and in a flexible row both
+   of those take their width out of the track - which slides out from under the
+   thumb while it is being dragged. Grid columns are declared rather than
+   measured, so the track stays where the hand put it. */
 .band-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 84px 22px;
+  align-items: center;
   gap: 4px;
 }
 
@@ -2055,12 +2137,29 @@ body {
   display: none;
 }
 
+/*
+ * The bridge across the gap.
+ *
+ * The popup floats six pixels above the row it belongs to, and that gap is
+ * outside both of them: a pointer crossing it has left the row, so the popup
+ * closed under the hand on its way there. This fills the gap with a strip of
+ * the popup itself - nothing to see, but the pointer never leaves.
+ */
+.slice-popup::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 10px;
+}
+
 /* Wider is what a handle needs, and the popup gives it the width; the thumbs
    grow with it so there is something to take hold of. */
 .slice-track.big .slider::-webkit-slider-thumb {
   width: 15px;
   height: 15px;
-  margin-top: 1.5px;
+  margin-top: -4.5px;
 }
 
 .slice-track.big .slider::-moz-range-thumb {
@@ -2289,7 +2388,9 @@ body.resizing {
   border: 1px solid var(--accent);
   border-radius: 4px;
   background: var(--panel-sunken);
-  max-height: 128px;
+  /* Whatever room the panel has left, measured by the workspace: the strip
+     opens under the matrix, and it must not push the matrix around to fit. */
+  max-height: var(--strip-max, 128px);
   overflow: auto;
 }
 
@@ -2582,6 +2683,16 @@ body.resizing {
   color: var(--ink);
   font: inherit;
   text-align: right;
+}
+
+.calc-clear {
+  margin-left: auto;
+  padding: 1px 5px;
+  font-size: 11px;
+}
+
+.calc-clear[hidden] {
+  display: none;
 }
 
 .calc-sizes {

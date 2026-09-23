@@ -70,11 +70,18 @@ let painting: string | null = null;
 
 if (typeof window !== "undefined") {
   window.addEventListener("pointerup", () => {
+    // The end of a brush stroke is the end of the press the band was armed
+    // for - and the whole stroke gets the same part of every row it crosses,
+    // rather than the first row partial and the rest whole.
+    if (painting !== null) disarmBand();
     painting = null;
   });
 }
 
 const STREETS = ["Flop", "Turn", "River"];
+
+/** How long the bigger slider waits before going away. */
+const SLICE_LINGER_MS = 320;
 
 export function createStatsPanel(): { element: HTMLElement; render: () => void } {
   const panel = document.createElement("section");
@@ -235,17 +242,32 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
   bandBlock.append(bandHeading);
   const bandRows = new Map<string, RowElements>();
   for (const key of ["best", "good", "weak", "trash"]) {
-    const row = createRow(-1, key);
+    const row = createRow(-1, key, key);
     row.element.dataset.band = key;
     row.element.removeAttribute("data-index");
-    // Pressing one paints it, in whichever part the band asks for. The point
-    // of the pair: press "trash hands" with the band on its best fifth and you
-    // have the best of the rubbish, which is what goes in a betting range.
-    row.element.addEventListener("click", () => {
-      const colour = state().colour;
-      if (colour === "none") return;
-      paintEquityBand(key, colour);
+    // A band is not a statistic, so it cannot be hovered as one - the row
+    // factory would put a made-up index into `hovered`, and the matrix would
+    // look up a statistic that does not exist and light nothing. It says which
+    // band it is instead, and the matrix lights the hands worth that much.
+    row.element.addEventListener("pointerenter", () => {
+      chrome.hovered = null;
+      chrome.hoveredBand = key;
       repaint();
+    });
+    row.element.addEventListener("pointerleave", () => {
+      if (chrome.hoveredBand !== key) return;
+      chrome.hoveredBand = null;
+      repaint();
+    });
+    // And held, or shift-clicked, it opens its hands under the matrix - the
+    // same thing a rung of the ladder does, for the same reason: a band is a
+    // hundred hands and sometimes only a few of them are meant.
+    press(row.element, {
+      hold: () => {
+        chrome.editing = null;
+        chrome.editingBand = chrome.editingBand === key ? null : key;
+        repaint();
+      },
     });
     bandRows.set(key, row);
     bandBlock.append(row.element);
@@ -268,7 +290,7 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
   bandRow.className = "row band-row";
   const bandLabel = document.createElement("span");
   bandLabel.className = "field-label";
-  bandLabel.textContent = "A row paints";
+  bandLabel.textContent = "Press a row for";
   const bandFrom = document.createElement("input");
   const bandTo = document.createElement("input");
   for (const [handle, which] of [
@@ -405,14 +427,49 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
     clearCut();
     repaint();
   });
-  // Under the pointer, and gone again when it leaves. A hover rather than a
-  // press: the small one is not a control to open something with, it is the
-  // same control at a size nobody can aim at.
-  shareRow.addEventListener("pointerenter", () => {
+  /*
+   * Under the pointer, and gone a moment after it leaves.
+   *
+   * A hover rather than a press: the small one is not a control to open
+   * something with, it is the same control at a size nobody can aim at.
+   *
+   * The moment matters. Closing the instant the pointer leaves the row made
+   * the big slider almost unreachable - it sits above the row with a gap under
+   * it, and crossing that gap is leaving the row, so only a flick fast enough
+   * to skip the gap between two mouse readings ever got there. The gap is
+   * bridged in the stylesheet, and this forgives the rest: a breath before it
+   * goes, cancelled if the pointer comes back, and never while a handle is
+   * being dragged.
+   */
+  let closing = 0;
+  let dragging = false;
+  const keepOpen = () => {
+    if (closing) window.clearTimeout(closing);
+    closing = 0;
     slicePopup.hidden = false;
-  });
-  shareRow.addEventListener("pointerleave", () => {
-    slicePopup.hidden = true;
+  };
+  const letGo = () => {
+    if (closing) window.clearTimeout(closing);
+    closing = window.setTimeout(() => {
+      closing = 0;
+      if (!dragging) slicePopup.hidden = true;
+    }, SLICE_LINGER_MS);
+  };
+  shareRow.addEventListener("pointerenter", keepOpen);
+  shareRow.addEventListener("pointermove", keepOpen);
+  shareRow.addEventListener("pointerleave", letGo);
+  for (const handle of [bigFrom, bigTo, shareFrom, shareTo]) {
+    handle.addEventListener("pointerdown", () => {
+      dragging = true;
+      keepOpen();
+    });
+  }
+  window.addEventListener("pointerup", () => {
+    if (!dragging) return;
+    dragging = false;
+    // The hand may have finished the drag somewhere else entirely, so it goes
+    // on the same terms as any other leaving.
+    if (!shareRow.matches(":hover")) letGo();
   });
 
   const footer = document.createElement("div");
@@ -667,12 +724,21 @@ export function createStatsPanel(): { element: HTMLElement; render: () => void }
         `${formatCombos(band.combos)} combos. Press to paint them.`;
       row.mark.className = "filter-mark mark-none";
       row.mark.textContent = "▼";
+      row.element.classList.toggle("editing", chrome.editingBand === band.key);
     }
 
     // What the band is asking for, said in words rather than in two numbers:
     // "0-100" is a thing a reader has to decode and "all of it" is not.
     const { low, high } = chrome.rowBand;
-    bandRow.hidden = preflopMode;
+    // Only where there is an opponent to be strong against. The part it takes
+    // is the top of a row *by equity*, so with nothing to measure against
+    // there is no top and no bottom - the control would be a control that
+    // silently does nothing, which is worse than one that is not there.
+    bandRow.hidden = preflopMode || bands.length === 0;
+    bandRow.title =
+      "Pressing a row paints this much of it, strongest first, by equity against the other range. " +
+      "All of it is the plain thing a press has always done; anything less leaves the row half " +
+      "painted, which is what a gear beside it means.";
     bandFrom.value = String(low);
     bandTo.value = String(high);
     bandValue.textContent =
@@ -816,17 +882,44 @@ interface RowElements {
 }
 
 /** Applies the drag in progress to one row. */
-function applyPainted(index: number): void {
+function applyPainted(index: number, band?: string): void {
   if (painting === null) return;
   const wanted = painting;
+  // A band is not a rung of the ladder: there is no statistic behind it, so
+  // what it paints is worked out from equity rather than looked up.
+  if (band !== undefined) {
+    paintEquityBand(band, wanted);
+    return;
+  }
   mutate((engine) => {
     if (preflopMode) {
       const on = state().checkmarks[index];
       if (on !== (wanted !== "none")) engine.toggleCheckmark(index);
       return;
     }
-    engine.paintStat(index, wanted);
+    // The same part of the row the marker beside it would paint: pressing the
+    // triangle and pressing the row are the same act, and answering them
+    // differently was the surest way to make the band look broken.
+    if (wanted === "none" || whole()) {
+      engine.paintStat(index, wanted);
+      return;
+    }
+    engine.paintStatPart(index, chrome.rowBand.low, chrome.rowBand.high, wanted);
   });
+}
+
+/**
+ * Puts the band back to the whole of a row, once the painting is done.
+ *
+ * Armed, used, disarmed: a part-of-a-row press is a thing a reader wants for
+ * one press, and leaving it set meant every press after it was quietly partial
+ * too - which reads as the panel painting the wrong hands rather than as a
+ * setting still being on.
+ */
+function disarmBand(): void {
+  if (whole()) return;
+  chrome.rowBand = { low: 0, high: 100 };
+  repaint();
 }
 
 /** Whether the band is the whole of a row, which is what a press used to do. */
@@ -834,7 +927,7 @@ function whole(): boolean {
   return chrome.rowBand.low <= 0 && chrome.rowBand.high >= 100;
 }
 
-function createRow(index: number, label: string): RowElements {
+function createRow(index: number, label: string, band?: string): RowElements {
   const element = document.createElement("div");
   element.className = "stat-row";
   element.dataset.index = String(index);
@@ -877,6 +970,14 @@ function createRow(index: number, label: string): RowElements {
   // Clicking paints with the held colour; clicking a row already wholly in that
   // colour unpaints it, so one control both sets and clears.
   const apply = () => {
+    if (band !== undefined) {
+      // Pressing a band paints it, in whichever part the band row asks for:
+      // press "trash hands" with the slider on its best fifth and you have the
+      // best of the rubbish, which is what goes in a betting range.
+      const colour = state().colour;
+      if (colour !== "none") paintEquityBand(band, colour);
+      return;
+    }
     mutate((engine) => {
       if (preflopMode) {
         engine.toggleCheckmark(index);
@@ -900,6 +1001,12 @@ function createRow(index: number, label: string): RowElements {
   const startPainting = (event: Event) => {
     event.stopPropagation();
     const view = state();
+    if (band !== undefined) {
+      if (view.colour === "none") return;
+      painting = view.colour;
+      applyPainted(index, band);
+      return;
+    }
     painting = preflopMode
       ? view.checkmarks[index]
         ? "none"
@@ -910,12 +1017,13 @@ function createRow(index: number, label: string): RowElements {
     applyPainted(index);
   };
   press(mark, { act: startPainting });
-  mark.addEventListener("pointerenter", () => applyPainted(index));
+  mark.addEventListener("pointerenter", () => applyPainted(index, band));
 
   element.addEventListener("click", (event) => {
     if ((event.target as HTMLElement).closest(".filter-mark")) return;
     if ((event as MouseEvent).shiftKey) return;
     apply();
+    disarmBand();
     // Preflop a tick is a question about a pass that may not have been run.
     // Asking the question is as good a reason to run it as pressing the button,
     // and it is the only reading under which the tick does anything at all.

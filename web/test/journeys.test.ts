@@ -20,12 +20,14 @@ import { createApp, type App as AppUnderTest } from "../src/app";
 import {
   boot,
   chrome,
+  equityByCombo,
   classLabels,
   mutate,
   resetChrome,
   restore,
   snapshot,
   state,
+  statCombos,
   statDefs,
 } from "../src/store";
 import { loadColumns } from "../src/ui/workspace";
@@ -1243,7 +1245,7 @@ describe("the output views", () => {
       ["overlap", /Pick a flop/],
       ["eq-matrix", /Needs something to measure against/],
       ["eq-graph", /Needs something to measure against/],
-      ["hotness", /Needs a dealt hand/],
+      ["hotness", /flop or a turn so there is a card still to come/],
     ] as const) {
       tab(app, key).click();
       app.render();
@@ -1360,6 +1362,45 @@ describe("the range read by what its hands are worth", () => {
     app.render();
     expect(app.stats.querySelector<HTMLElement>(".block-bands")!.hidden).toBe(true);
   });
+
+  test("pointing at a band lights the hands it means", async () => {
+    const app = await table();
+    const lit = () =>
+      Array.from(app.range.querySelectorAll<HTMLElement>(".cell.lit")).map(
+        (cell) => cell.querySelector(".cell-label")?.textContent ?? "",
+      );
+    const point = (element: HTMLElement, at: "pointerenter" | "pointerleave") => {
+      element.dispatchEvent(new window.MouseEvent(at, { bubbles: true }));
+      app.render();
+    };
+
+    expect(lit(), "nothing is lit until something is pointed at").toHaveLength(0);
+
+    // A band is not a rung of the ladder, so it cannot be hovered as one: it
+    // used to put a statistic index nobody has into the hover, and the matrix
+    // looked that up and lit nothing.
+    point(band(app, "best"), "pointerenter");
+    expect(chrome.hovered, "a band is not a statistic").toBeNull();
+    expect(chrome.hoveredBand).toBe("best");
+    const best = lit();
+    expect(best.length).toBeGreaterThan(0);
+    expect(best, "aces are worth the most on any board").toContain("AA");
+
+    // Another band is another set of hands, not the same one again.
+    point(band(app, "best"), "pointerleave");
+    point(band(app, "trash"), "pointerenter");
+    const trash = lit();
+    expect(trash.length).toBeGreaterThan(0);
+    expect(trash).not.toContain("AA");
+    expect(trash).not.toEqual(best);
+
+    // And the ladder still lights what it always did.
+    point(band(app, "trash"), "pointerleave");
+    expect(lit()).toHaveLength(0);
+    point(row(app, "top pair"), "pointerenter");
+    expect(lit().length).toBeGreaterThan(0);
+    app.teardown();
+  }, 30000);
 
   test("a band paints, and the slider takes a slice of it", async () => {
     const app = await table();
@@ -4164,6 +4205,78 @@ describe("a second copy of a range", () => {
   }, 30000);
 });
 
+describe("the hands behind a row, one at a time", () => {
+  /** Shift-pressing a row, which is what opens the strip under the matrix. */
+  const shiftPress = (app: App, element: HTMLElement) => {
+    const event = new window.MouseEvent("pointerdown", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "shiftKey", { value: true });
+    Object.defineProperty(event, "pointerType", { value: "mouse" });
+    element.dispatchEvent(event);
+    app.render();
+  };
+  const chips = (app: App) =>
+    Array.from(app.range.querySelectorAll<HTMLElement>(".edit-strip .combo-chip")).map(
+      (chip) => chip.dataset.combo ?? "",
+    );
+  /** One row of the By-equity block, by the band it is about. */
+  const bandRow = (app: App, key: string) =>
+    app.stats.querySelector<HTMLElement>(`.stat-row[data-band="${key}"]`)!;
+
+  test("a band opens like a rung does, strongest hand first", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, "22+, A2s+, KTo+");
+    seats2(app)[1].click();
+    app.render();
+    type(app, "88+, ATs+, AQo+");
+    seats2(app)[0].click();
+    app.render();
+
+    const strip = app.range.querySelector<HTMLElement>(".edit-strip")!;
+    expect(strip.hidden).toBe(true);
+
+    // A rung of the ladder opens its hands, as it always did.
+    shiftPress(app, row(app, "top pair"));
+    expect(strip.hidden).toBe(false);
+    const rung = chips(app);
+    expect(rung.length).toBeGreaterThan(1);
+    expect(strip.querySelector(".field-label")!.textContent).toMatch(/^top pair — \d+ combos/);
+
+    // In the order that makes a list of a hundred readable: what each hand is
+    // worth against the other range, best first.
+    const worth = (combo: string) => {
+      const data = equityByCombo()!;
+      return data.equity[Number(combo)];
+    };
+    for (let at = 1; at < rung.length; at += 1) {
+      expect(worth(rung[at]), "strongest first").toBeLessThanOrEqual(worth(rung[at - 1]) + 1e-6);
+    }
+
+    // And a band of equity opens the same way, which it could not before: it
+    // is not a rung, so the row was passing a statistic nobody has.
+    shiftPress(app, bandRow(app, "good"));
+    expect(strip.hidden).toBe(false);
+    expect(strip.querySelector(".field-label")!.textContent).toMatch(/^good hands — \d+ combos/);
+    const good = chips(app);
+    expect(good.length).toBeGreaterThan(1);
+    expect(good).not.toEqual(rung);
+    for (let at = 1; at < good.length; at += 1) {
+      expect(worth(good[at])).toBeLessThanOrEqual(worth(good[at - 1]) + 1e-6);
+    }
+    // Every hand in it is worth what the band says it is: good is the half
+    // between the best and the middle.
+    expect(worth(good[0])).toBeLessThan(0.75);
+    expect(worth(good[good.length - 1])).toBeGreaterThanOrEqual(0.5);
+
+    // Pressing the same band again shuts it.
+    shiftPress(app, bandRow(app, "good"));
+    expect(strip.hidden).toBe(true);
+    app.teardown();
+  }, 30000);
+});
+
 describe("a slice of the range rather than its top", () => {
   /** Which hands are carrying a colour, by the name on the cell. */
   const painted = (app: App) =>
@@ -4246,9 +4359,17 @@ describe("a slice of the range rather than its top", () => {
     expect(chrome.cut!.from + chrome.cut!.covered).toBeLessThan(0.65);
     expect(Number(smallTo.value)).toBeCloseTo(Number(bigTo.value), 6);
 
-    // And it goes away again when the pointer does.
+    // And it goes away a moment after the pointer does - a moment, because the
+    // bigger slider sits above the row and reaching it means leaving the row.
+    // Closing on the instant made it almost unreachable.
     row.dispatchEvent(new window.Event("pointerleave", { bubbles: false }));
-    expect(popup.hidden).toBe(true);
+    expect(popup.hidden, "not the instant the pointer leaves").toBe(false);
+    row.dispatchEvent(new window.Event("pointerenter", { bubbles: false }));
+    await new Promise((rest) => setTimeout(rest, 400));
+    app.render();
+    expect(popup.hidden, "coming back cancels the closing").toBe(false);
+    row.dispatchEvent(new window.Event("pointerleave", { bubbles: false }));
+    await vi.waitFor(() => expect(popup.hidden).toBe(true), { timeout: 3000 });
 
     // The whole of it is no slice at all.
     drag(small, 0);
@@ -4257,6 +4378,259 @@ describe("a slice of the range rather than its top", () => {
     expect(readout.textContent).toBe("all");
     app.teardown();
   }, 30000);
+});
+
+describe("what a seat tile says at a glance", () => {
+  /** One seat's thumbnail, read as the three things it draws. */
+  const thumb = (app: App, seat: number) => {
+    const card = seats2(app)[seat];
+    const cells = Array.from(card.querySelectorAll<HTMLElement>(".thumb-matrix i"));
+    const lights = Array.from(card.querySelectorAll<HTMLElement>(".street-light"));
+    return {
+      held: cells.filter((cell) => cell.classList.contains("on")).length,
+      faded: cells.filter((cell) => cell.classList.contains("filtered")).length,
+      strip: card.querySelector<HTMLElement>(".seat-streets")!,
+      // One character per street: lit, unlit, or not dealt yet.
+      lights: lights
+        .map((light) => (light.hidden ? "-" : light.classList.contains("on") ? "on" : "off"))
+        .join(" "),
+    };
+  };
+
+  test("the hands a filter has taken away are faded, and a light says which street took them", async () => {
+    const app = await open();
+    type(app, "22+, A2s+, KJs+, AJo+");
+    // Nothing dealt: there is no street to have a filter on, so no lights.
+    expect(thumb(app, 0).strip.hidden).toBe(true);
+    expect(thumb(app, 0).held).toBeGreaterThan(20);
+    expect(thumb(app, 0).faded).toBe(0);
+
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    expect(thumb(app, 0).strip.hidden).toBe(false);
+    // One street dealt, one light, and nothing filtered yet.
+    expect(thumb(app, 0).lights).toBe("off - -");
+    expect(thumb(app, 0).faded).toBe(0);
+
+    // Keep only the top pairs on this flop, which most of the range misses.
+    headButton(app.stats, "Clear").click();
+    app.render();
+    row(app, "top pair").click();
+    app.render();
+    streets(app)[0].click();
+    app.render();
+
+    const filtered = thumb(app, 0);
+    expect(filtered.lights).toBe("on - -");
+    expect(filtered.faded).toBeGreaterThan(0);
+    expect(filtered.faded).toBeLessThanOrEqual(filtered.held);
+    // Faded rather than dropped: the tile says what the seat was given as well
+    // as what it is still playing.
+    expect(filtered.held).toBe(thumb(app, 0).held);
+
+    // A turn card is a second street to filter, lit on its own account.
+    card(app.board, "9d");
+    app.render();
+    expect(thumb(app, 0).lights).toBe("on off -");
+    streets(app)[1].click();
+    app.render();
+    expect(thumb(app, 0).lights).toBe("on on -");
+
+    // And the filter belongs to the seat that set it: the other one has none.
+    seats2(app)[1].click();
+    app.render();
+    type(app, "QQ+, AKs");
+    expect(thumb(app, 1).lights).toBe("off off -");
+    expect(thumb(app, 1).faded).toBe(0);
+    expect(thumb(app, 0).lights).toBe("on on -");
+  });
+});
+
+describe("part of a row rather than the whole of it", () => {
+  /** The band row's slider pair, its readout, and its reset. */
+  const band = (app: App) => {
+    const element = app.stats.querySelector<HTMLElement>(".band-row")!;
+    return {
+      element,
+      handles: Array.from(element.querySelectorAll<HTMLInputElement>(".band-slider")),
+      value: element.querySelector<HTMLElement>(".band-value")!,
+      clear: element.querySelector<HTMLButtonElement>(".band-clear")!,
+    };
+  };
+  /** Drags one of its handles, the way a reader does. */
+  const drag = (app: App, handle: HTMLInputElement, to: number) => {
+    handle.value = String(to);
+    handle.dispatchEvent(new window.Event("input", { bubbles: true }));
+    app.render();
+  };
+  /** A press that goes down, comes up and clicks, as a mouse on a row does. */
+  const stroke = (app: App, element: HTMLElement) => {
+    element.dispatchEvent(
+      new window.MouseEvent("pointerdown", { bubbles: true, cancelable: true }),
+    );
+    window.dispatchEvent(new window.MouseEvent("pointerup", { bubbles: true }));
+    element.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    app.render();
+  };
+
+  /** Where a statistic sits in the engine's list, by the name printed on it. */
+  const indexOf = (label: string) => statDefs.find((def) => def.label === label)!.index;
+
+  /** Two ranges on a flop, which is the least that gives a row a top and a bottom. */
+  const together = async (mine: string, theirs: string): Promise<App> => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, mine);
+    seats2(app)[1].click();
+    app.render();
+    type(app, theirs);
+    seats2(app)[0].click();
+    app.render();
+    return app;
+  };
+
+  test("the control is not there while there is nothing to be strong against", async () => {
+    const app = await open();
+    card(app.board, "Kh");
+    card(app.board, "7h");
+    card(app.board, "2c");
+    type(app, "22+, A2s+, KJs+, AJo+");
+    // The part it takes is the top of a row by equity, so with one range on
+    // the board there is no top: a control that could only do nothing is not
+    // shown at all.
+    expect(band(app).element.hidden).toBe(true);
+
+    seats2(app)[1].click();
+    app.render();
+    type(app, "QQ+, AKs");
+    seats2(app)[0].click();
+    app.render();
+    expect(band(app).element.hidden).toBe(false);
+    expect(band(app).value.textContent).toBe("all of it");
+  });
+
+  test("a press paints the top of the row by equity, and only that much", async () => {
+    const app = await together("22+, A2s+, KJs+, AJo+", "QQ+, AKs");
+    headButton(app.stats, "Clear").click();
+    app.render();
+
+    const label = "top pair";
+    const before = statCombos(indexOf(label));
+    expect(before.length, "a row with enough hands in it to take a quarter of").toBeGreaterThan(8);
+
+    const [low, high] = band(app).handles;
+    drag(app, low, 0);
+    drag(app, high, 25);
+    expect(band(app).value.textContent).toBe("top 25%");
+
+    row(app, label).click();
+    app.render();
+
+    // The list comes back strongest first, so the hands that took the colour
+    // have to be the front of it rather than a quarter chosen some other way.
+    const after = statCombos(indexOf(label));
+    const painted = after.filter(([, , colour]) => colour !== "none");
+    expect(painted.length).toBeGreaterThan(0);
+    expect(painted.length).toBeLessThan(after.length);
+    const front = after.slice(0, painted.length).map(([combo]) => combo);
+    expect(painted.map(([combo]) => combo)).toEqual(front);
+    // About a quarter of it: the cut falls between two hands rather than
+    // through one, so the count is near the share rather than exactly it.
+    expect(painted.length / after.length).toBeGreaterThan(0.1);
+    expect(painted.length / after.length).toBeLessThan(0.45);
+
+    // Half a row painted is what the gear means.
+    expect(reading(app, label).mark).toBe("mixed");
+  });
+
+  test("it is armed for one press and then puts itself back", async () => {
+    const app = await together("22+, A2s+, KJs+, AJo+", "QQ+, AKs");
+    headButton(app.stats, "Clear").click();
+    app.render();
+    const [low, high] = band(app).handles;
+    drag(app, low, 0);
+    drag(app, high, 30);
+    expect(chrome.rowBand).toEqual({ low: 0, high: 30 });
+
+    stroke(app, row(app, "top pair"));
+    // Leaving it set meant every press after it was quietly partial too, which
+    // reads as the panel painting the wrong hands rather than as a setting.
+    expect(chrome.rowBand).toEqual({ low: 0, high: 100 });
+    expect(band(app).value.textContent).toBe("all of it");
+
+    // And the press after it paints the whole row, as a press always did.
+    const label = "second pair";
+    const index = indexOf(label);
+    stroke(app, row(app, label));
+    const after = statCombos(index);
+    if (after.length > 0) {
+      expect(after.every(([, , colour]) => colour !== "none")).toBe(true);
+      expect(reading(app, label).mark).not.toBe("mixed");
+    }
+  });
+
+  test("the triangle and the row are the same press", async () => {
+    const app = await together("22+, A2s+, KJs+, AJo+", "QQ+, AKs");
+    headButton(app.stats, "Clear").click();
+    app.render();
+    const [low, high] = band(app).handles;
+    drag(app, low, 0);
+    drag(app, high, 25);
+
+    const label = "top pair";
+    const index = indexOf(label);
+    const mark = row(app, label).querySelector<HTMLElement>(".filter-mark")!;
+    stroke(app, mark);
+
+    const after = statCombos(index);
+    const painted = after.filter(([, , colour]) => colour !== "none");
+    expect(painted.length).toBeGreaterThan(0);
+    expect(painted.length).toBeLessThan(after.length);
+    expect(reading(app, label).mark).toBe("mixed");
+    expect(chrome.rowBand).toEqual({ low: 0, high: 100 });
+  });
+
+  test("a band's triangle takes the same slice its row does", async () => {
+    const app = await together("22+, A2s+, KJs+, AJo+", "QQ+, AKs");
+    headButton(app.stats, "Clear").click();
+    app.render();
+    const whole = () =>
+      state()
+        .groupShares.slice(1)
+        .reduce((sum, share) => sum + share, 0);
+
+    const trash = app.stats.querySelector<HTMLElement>('.stat-row[data-band="trash"]')!;
+    stroke(app, trash);
+    const all = whole();
+    expect(all).toBeGreaterThan(0);
+
+    headButton(app.stats, "Clear").click();
+    app.render();
+    const [, high] = band(app).handles;
+    drag(app, high, 20);
+    // The triangle, not the row: pressing the marker beside a band is the same
+    // act as pressing the band, and answering them differently was the surest
+    // way to make the slider look broken.
+    stroke(app, trash.querySelector<HTMLElement>(".filter-mark")!);
+    expect(whole()).toBeGreaterThan(0);
+    expect(whole()).toBeLessThan(all);
+    expect(chrome.rowBand).toEqual({ low: 0, high: 100 });
+  });
+
+  test("the cross puts it back to the whole of a row", async () => {
+    const app = await together("22+, A2s+, KJs+, AJo+", "QQ+, AKs");
+    const [low, high] = band(app).handles;
+    drag(app, low, 40);
+    drag(app, high, 60);
+    expect(band(app).value.textContent).toBe("40\u201360%");
+    band(app).clear.click();
+    app.render();
+    expect(chrome.rowBand).toEqual({ low: 0, high: 100 });
+    expect(band(app).value.textContent).toBe("all of it");
+  });
 });
 
 describe("the palette", () => {
@@ -4773,6 +5147,34 @@ describe("what a call costs and what it is worth", () => {
     return app;
   };
 
+  test("it starts with nothing in it, and can be emptied again", async () => {
+    const app = await spot();
+    // Nothing assumed: a calculator that opens with a pot in it is answering a
+    // question nobody asked, and the answer looks like it is about the range
+    // on screen.
+    expect(field(app, "pot").value).toBe("");
+    expect(field(app, "bet").value).toBe("");
+    expect(line(app, "Pot odds").value).toBe("—");
+    expect(line(app, "MDF").value).toBe("—");
+    expect(line(app, "EV call").value).toBe("—");
+    const clear = app.calc.querySelector<HTMLButtonElement>(".calc-clear")!;
+    expect(clear.hidden, "nothing to clear yet").toBe(true);
+
+    typeIn(field(app, "bet"), 50);
+    typeIn(field(app, "pot"), 150);
+    expect(line(app, "Pot odds").value).toBe("25.0%");
+    expect(clear.hidden).toBe(false);
+
+    // And back to nothing, in one press.
+    clear.click();
+    app.render();
+    expect(field(app, "pot").value).toBe("");
+    expect(field(app, "bet").value).toBe("");
+    expect(line(app, "Pot odds").value).toBe("—");
+    expect(clear.hidden).toBe(true);
+    app.teardown();
+  }, 30000);
+
   test("the price of a call, worked out from the pot and the bet", async () => {
     const app = await spot();
     // The pot as it stands with their bet in it, and the bet: the two numbers
@@ -4999,6 +5401,8 @@ describe("what a call costs and what it is worth", () => {
 
   test("the opponent is the one named beside it", async () => {
     const app = await spot();
+    typeIn(field(app, "bet"), 50);
+    typeIn(field(app, "pot"), 150);
     // A third range, so there is something to round between.
     app.strip.querySelector<HTMLButtonElement>(".seat-add")!.click();
     app.render();
@@ -5041,6 +5445,8 @@ describe("what a call costs and what it is worth", () => {
     seats2(app)[0].click();
     app.render();
     expect(state().board).toBe("");
+    typeIn(field(app, "bet"), 50);
+    typeIn(field(app, "pot"), 150);
 
     // Against everybody at once, the pot's own report answers it and there is
     // nothing to run.
@@ -5071,6 +5477,8 @@ describe("what a call costs and what it is worth", () => {
     card(app.board, "7h");
     card(app.board, "2c");
     // One range and an empty seat: arithmetic yes, equity no.
+    typeIn(field(app, "bet"), 50);
+    typeIn(field(app, "pot"), 150);
     expect(line(app, "Pot odds").value).toBe("25.0%");
     expect(line(app, "MDF").value).toBe("66.7%");
     expect(line(app, "EV call").value).toBe("—");

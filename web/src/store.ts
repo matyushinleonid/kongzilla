@@ -35,6 +35,16 @@ export interface Chrome {
   window: { low: number; high: number };
   /** Statistic the pointer is over, or null. */
   hovered: number | null;
+  /**
+   * Band of equity the pointer is over, or null.
+   *
+   * Apart from `hovered` rather than folded into it: a band is not a statistic
+   * and has no place in the registry, and giving it a made-up index there was
+   * how hovering one came to light nothing at all.
+   */
+  hoveredBand: string | null;
+  /** Band of equity opened for painting hand by hand, or null. */
+  editingBand: string | null;
   /** Show combination counts instead of percentages. */
   showCombos: boolean;
   /** Which stack depth the library chips are showing. */
@@ -141,6 +151,8 @@ const FRESH: Chrome = {
   brush: 1,
   window: { low: 0, high: 100 },
   hovered: null,
+  hoveredBand: null,
+  editingBand: null,
   showCombos: false,
   libraryStack: "",
   libraryNoZeroEv: false,
@@ -160,8 +172,11 @@ const FRESH: Chrome = {
   suitCell: null,
   preflop: null,
   rowBand: { low: 0, high: 100 },
-  pot: 150,
-  bet: 50,
+  // Nothing in the boxes until a reader puts a spot there: a calculator that
+  // opens with a hundred and fifty in the pot is answering a question nobody
+  // asked, and the answer looks like it is about the range on screen.
+  pot: 0,
+  bet: 0,
   slice: { from: 0, to: 1 },
   preflopRunning: false,
   theme: null,
@@ -366,6 +381,22 @@ export function cellCombos(cell: number): CellCombo[] {
 /** The hands carrying one statistic, with their colours. */
 export function statCombos(stat: number): Array<[number, string, string]> {
   return JSON.parse(engine.statCombos(stat));
+}
+
+/** The same, for the hands in one band of equity rather than on one rung. */
+export function bandCombos(band: string): Array<[number, string, string]> {
+  return JSON.parse(engine.bandCombos(band));
+}
+
+/**
+ * How much of each matrix cell is worth this much against the other range.
+ *
+ * The same reading [`highlight`] takes for a statistic, for a band of equity:
+ * hovering "best hands" has to light the hands it means, and those are not a
+ * category anybody can name - they are whatever is worth 75% today.
+ */
+export function bandShares(band: string): Float32Array {
+  return engine.bandShares(band);
 }
 
 /**

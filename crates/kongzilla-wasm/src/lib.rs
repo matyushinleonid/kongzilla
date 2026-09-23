@@ -87,6 +87,11 @@ struct PlayerView {
     percent: f64,
     /// Mean weight per matrix cell, for the seat's thumbnail.
     class_weights: Vec<f32>,
+    /// What share of each cell survives this seat's own street filters, so the
+    /// thumbnail can show what is left rather than what was typed.
+    class_passing: Vec<f32>,
+    /// Which streets this seat has filtered, flop first.
+    streets: Vec<bool>,
     /// Where the seat's range slider sits, in percent of the deck.
     slider_low: f64,
     slider_high: f64,
@@ -740,13 +745,66 @@ impl Engine {
             return "[]".to_owned();
         };
         let session = &self.session;
-        let combos: Vec<(u16, String, String)> = session
+        self.listed(|combo| {
+            session.active().range.get(combo) > 0.0 && session.stats().mask(combo).has(stat)
+        })
+    }
+
+    /// The hands in one band of equity, with their colours.
+    #[wasm_bindgen(js_name = bandCombos)]
+    pub fn band_combos(&self, band: &str) -> String {
+        let Some(wanted) = EquityBand::ALL.into_iter().find(|it| it.key() == band) else {
+            return "[]".to_owned();
+        };
+        let Some(equity) = self.session.equity_by_combo() else {
+            return "[]".to_owned();
+        };
+        let session = &self.session;
+        self.listed(|combo| {
+            if session.active().range.get(combo) <= 0.0 {
+                return false;
+            }
+            let value = equity.equity[combo.index() as usize];
+            value >= 0.0 && EquityBand::of(value) == wanted
+        })
+    }
+
+    /// The hands a question picks out, strongest first.
+    ///
+    /// Strongest by what they are worth against the other range, and where
+    /// that says nothing - no opponent, or two hands that beat it equally
+    /// often - by the better five cards. A list of a hundred combinations in
+    /// the order the deck happens to number them is a list nobody can read.
+    fn listed(&self, wanted: impl Fn(Combo) -> bool) -> String {
+        let session = &self.session;
+        let equity = session.equity_by_combo();
+        let ranks = session.rank_by_combo();
+        let worth = |combo: Combo| {
+            equity
+                .as_ref()
+                .map_or(-1.0, |by| by.equity[combo.index() as usize])
+        };
+        let rank = |combo: Combo| {
+            ranks
+                .get(combo.index() as usize)
+                .copied()
+                .unwrap_or_default()
+        };
+        let mut held: Vec<Combo> = session
             .stats()
             .live()
             .iter()
-            .filter(|combo| {
-                session.active().range.get(*combo) > 0.0 && session.stats().mask(*combo).has(stat)
-            })
+            .filter(|combo| wanted(*combo))
+            .collect();
+        held.sort_by(|a, b| {
+            worth(*b)
+                .partial_cmp(&worth(*a))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| rank(*b).cmp(&rank(*a)))
+                .then_with(|| a.index().cmp(&b.index()))
+        });
+        let combos: Vec<(u16, String, String)> = held
+            .into_iter()
             .map(|combo| {
                 (
                     combo.index(),
@@ -1048,6 +1106,8 @@ impl Engine {
                     combos: p.range.combo_count(),
                     percent: p.range.percent_of_deck() * 100.0,
                     class_weights: p.range.class_weights().to_vec(),
+                    class_passing: session.class_passing_for(seat).to_vec(),
+                    streets: p.streets.iter().map(|street| street.is_some()).collect(),
                     slider_low: p.slider.low,
                     slider_high: p.slider.high,
                     chart: p.from_library.as_ref().map(|from| from.id.clone()),
@@ -1154,6 +1214,16 @@ impl Engine {
             .map(StatId::mask)
             .unwrap_or_default();
         self.session.highlight(mask).to_vec()
+    }
+
+    /// Per-cell matrix weights for one band of equity, empty for an unknown one.
+    #[wasm_bindgen(js_name = bandShares)]
+    pub fn band_shares(&self, band: &str) -> Vec<f32> {
+        EquityBand::ALL
+            .into_iter()
+            .find(|it| it.key() == band)
+            .map(|band| self.session.band_shares(band).to_vec())
+            .unwrap_or_default()
     }
 
     /// The session as JSON, for saving and for shareable links.
